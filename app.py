@@ -147,6 +147,21 @@ def excel_bytes(frame: pd.DataFrame) -> bytes:
     return output.getvalue()
 
 
+def outlet_list_excel_bytes(frame: pd.DataFrame) -> bytes:
+    """Prepare the displayed outlet list for export with Indonesian-style values."""
+    export_frame = frame.copy()
+    if "Nominal Kontrak" in export_frame:
+        export_frame["Nominal Kontrak"] = export_frame["Nominal Kontrak"].map(
+            lambda value: "" if pd.isna(value) else f"{float(value):,.0f}".replace(",", ".")
+        )
+    for column in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
+        if column in export_frame:
+            export_frame[column] = pd.to_datetime(export_frame[column], errors="coerce").map(
+                lambda value: "" if pd.isna(value) else value.strftime("%d/%m/%Y")
+            )
+    return excel_bytes(export_frame)
+
+
 def save_data(frame: pd.DataFrame) -> None:
     errors = validate_data(frame)
     if errors:
@@ -320,6 +335,13 @@ if active_menu == "Dashboard":
     if selected_status != "Semua":
         view = view[view["Status Kontrak"] == selected_status]
     st.subheader("Daftar outlet dan status kontrak")
+    st.download_button(
+        "Download daftar outlet ke Excel",
+        data=outlet_list_excel_bytes(view.sort_values("Sisa Hari", na_position="last")),
+        file_name="Daftar_Outlet_dan_Status_Kontrak.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="download_filtered_outlet_list",
+    )
     if view.empty:
         st.info("Belum ada data yang cocok. Gunakan menu Upload Excel di sidebar untuk memasukkan data.")
     else:
