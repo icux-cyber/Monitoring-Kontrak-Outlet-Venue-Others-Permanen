@@ -148,7 +148,6 @@ def excel_bytes(frame: pd.DataFrame) -> bytes:
 
 
 def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
-    """Format contract amount and dates for the Streamlit display only."""
     display_frame = frame.copy()
     if "Nominal Kontrak" in display_frame:
         display_frame["Nominal Kontrak"] = display_frame["Nominal Kontrak"].map(
@@ -163,17 +162,7 @@ def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def outlet_list_excel_bytes(frame: pd.DataFrame) -> bytes:
-    """Prepare the displayed outlet list for export with Indonesian-style values."""
-    export_frame = frame.copy()
-    if "Nominal Kontrak" in export_frame:
-        export_frame["Nominal Kontrak"] = export_frame["Nominal Kontrak"].map(
-            lambda value: "" if pd.isna(value) else f"{float(value):,.0f}".replace(",", ".")
-        )
-    for column in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
-        if column in export_frame:
-            export_frame[column] = pd.to_datetime(export_frame[column], errors="coerce").map(
-                lambda value: "" if pd.isna(value) else value.strftime("%d/%m/%Y")
-            )
+    export_frame = format_outlet_table(frame)
     return excel_bytes(export_frame)
 
 
@@ -201,7 +190,7 @@ def master_options(frame: pd.DataFrame, column: str) -> list[str]:
     return values
 
 
-def render_outlet_form(current: pd.Series, row_index: int | None, master_frame: pd.DataFrame) -> dict:
+def render_outlet_form(current: pd.Series, row_index: int | None, master_frame: pd.DataFrame) -> tuple[bool, dict]:
     suffix = "new" if row_index is None else f"row_{row_index}"
     is_new = row_index is None
     with st.form(f"outlet_form_{suffix}"):
@@ -211,18 +200,13 @@ def render_outlet_form(current: pd.Series, row_index: int | None, master_frame: 
             outlet_id = st.text_input("ID Outlet", value=safe_text(current["ID Outlet"]), key=f"id_{suffix}")
             outlet_name = st.text_input("Nama Outlet", value=safe_text(current["Nama Outlet"]), key=f"name_{suffix}")
             address = st.text_area("Alamat", value=safe_text(current["Alamat"]), key=f"address_{suffix}")
-
             zones = master_options(master_frame, "Zona")
             sectors = master_options(master_frame, "Sektor")
             outlet_categories = master_options(master_frame, "Kategori Outlet")
-
             if is_new:
                 zone = st.selectbox("Zona", zones, index=None, placeholder="Pilih zona", key=f"zone_{suffix}") or pd.NA
                 sector = st.selectbox("Sektor", sectors, index=None, placeholder="Pilih sektor", key=f"sector_{suffix}") or pd.NA
-                outlet_category = st.selectbox(
-                    "Kategori Outlet", outlet_categories, index=None,
-                    placeholder="Pilih kategori outlet", key=f"outlet_category_{suffix}",
-                ) or pd.NA
+                outlet_category = st.selectbox("Kategori Outlet", outlet_categories, index=None, placeholder="Pilih kategori outlet", key=f"outlet_category_{suffix}") or pd.NA
             else:
                 zone = st.text_input("Zona", value=safe_text(current["Zona"]), key=f"zone_{suffix}")
                 sector = st.text_input("Sektor", value=safe_text(current["Sektor"]), key=f"sector_{suffix}")
@@ -230,28 +214,16 @@ def render_outlet_form(current: pd.Series, row_index: int | None, master_frame: 
         with right:
             job_categories = master_options(master_frame, "Kategori Pekerjaan")
             brands = master_options(master_frame, "Brand")
-
             if is_new:
-                job_category = st.selectbox(
-                    "Kategori Pekerjaan", job_categories, index=None,
-                    placeholder="Pilih kategori pekerjaan", key=f"job_category_{suffix}",
-                ) or pd.NA
+                job_category = st.selectbox("Kategori Pekerjaan", job_categories, index=None, placeholder="Pilih kategori pekerjaan", key=f"job_category_{suffix}") or pd.NA
                 brand = st.selectbox("Brand", brands, index=None, placeholder="Pilih brand", key=f"brand_{suffix}") or pd.NA
             else:
                 job_category = st.text_input("Kategori Pekerjaan", value=safe_text(current["Kategori Pekerjaan"]), key=f"job_category_{suffix}")
                 brand = st.text_input("Brand", value=safe_text(current["Brand"]), key=f"brand_{suffix}")
-
             parsed_amount = parse_amount(current["Nominal Kontrak"])
-            amount = st.number_input(
-                "Nominal Kontrak (Rp)", min_value=0.0, step=100000.0,
-                value=0.0 if pd.isna(parsed_amount) else float(parsed_amount), key=f"amount_{suffix}",
-            )
-            contract_start = st.date_input(
-                "Periode Kontrak Awal", value=safe_date(current["Periode Kontrak Awal"]), key=f"start_{suffix}"
-            )
-            contract_end = st.date_input(
-                "Periode Kontrak Akhir", value=safe_date(current["Periode Kontrak Akhir"]), key=f"end_{suffix}"
-            )
+            amount = st.number_input("Nominal Kontrak (Rp)", min_value=0.0, step=100000.0, value=0.0 if pd.isna(parsed_amount) else float(parsed_amount), key=f"amount_{suffix}")
+            contract_start = st.date_input("Periode Kontrak Awal", value=safe_date(current["Periode Kontrak Awal"]), key=f"start_{suffix}")
+            contract_end = st.date_input("Periode Kontrak Akhir", value=safe_date(current["Periode Kontrak Akhir"]), key=f"end_{suffix}")
         submitted = st.form_submit_button("Simpan data outlet", type="primary")
     values = {
         "ID Outlet": outlet_id.strip() or pd.NA,
@@ -302,16 +274,8 @@ with st.sidebar:
                     st.rerun()
             except Exception as error:
                 st.error(f"Gagal mengimpor Excel: {error}")
-    st.download_button(
-        "Download data Excel", data=excel_bytes(st.session_state.contracts),
-        file_name="Monitoring_Kontrak_Outlet.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True,
-    )
-    st.download_button(
-        "Download template Excel", data=excel_bytes(pd.DataFrame(columns=COLUMNS)),
-        file_name="Template_Monitoring_Kontrak_Outlet.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True,
-    )
+    st.download_button("Download data Excel", data=excel_bytes(st.session_state.contracts), file_name="Monitoring_Kontrak_Outlet.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+    st.download_button("Download template Excel", data=excel_bytes(pd.DataFrame(columns=COLUMNS)), file_name="Template_Monitoring_Kontrak_Outlet.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     st.caption("Penyimpanan lokal Streamlit Cloud dapat bersifat sementara. Unduh backup data secara berkala.")
 
 contracts = add_contract_status(st.session_state.contracts)
@@ -350,9 +314,11 @@ if active_menu == "Dashboard":
     if selected_status != "Semua":
         view = view[view["Status Kontrak"] == selected_status]
     st.subheader("Daftar outlet dan status kontrak")
+    st.metric("Jumlah outlet sesuai filter", f"{len(view):,}".replace(",", "."))
+    sorted_view = view.sort_values("Sisa Hari", na_position="last")
     st.download_button(
         "Download daftar outlet ke Excel",
-        data=outlet_list_excel_bytes(view.sort_values("Sisa Hari", na_position="last")),
+        data=outlet_list_excel_bytes(sorted_view),
         file_name="Daftar_Outlet_dan_Status_Kontrak.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="download_filtered_outlet_list",
@@ -360,7 +326,6 @@ if active_menu == "Dashboard":
     if view.empty:
         st.info("Belum ada data yang cocok. Gunakan menu Upload Excel di sidebar untuk memasukkan data.")
     else:
-        sorted_view = view.sort_values("Sisa Hari", na_position="last")
         st.dataframe(format_outlet_table(sorted_view), use_container_width=True, hide_index=True)
 
 elif active_menu == "Edit data outlet":
