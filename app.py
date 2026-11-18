@@ -7,20 +7,12 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-
 APP_TITLE = "Monitoring Kontrak Outlet"
 DATA_FILE = Path("data") / "Monitoring Kontrak Outlet.xlsx"
 SHEET_NAME = "Monitoring Kontrak Outlet"
 COLUMNS = [
-    "ID Outlet",
-    "Nama Outlet",
-    "Zona",
-    "Sektor",
-    "Kategori Outlet",
-    "Brand",
-    "Nominal Kontrak",
-    "Periode Kontrak Awal",
-    "Periode Kontrak Akhir",
+    "ID Outlet", "Nama Outlet", "Zona", "Sektor", "Kategori Outlet", "Brand",
+    "Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir",
 ]
 ALIASES = {
     "ID Outlet": ("ID Outlet", "ID Customer", "Customer ID", "Kode Outlet", "Outlet ID"),
@@ -43,6 +35,25 @@ def _clean_headers(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def parse_amount(value):
+    if pd.isna(value) or str(value).strip() == "":
+        return pd.NA
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    text = str(value).strip().replace("Rp", "").replace("rp", "").replace(" ", "")
+    if "," in text and "." in text:
+        text = text.replace(".", "").replace(",", ".") if text.rfind(",") > text.rfind(".") else text.replace(",", "")
+    elif "," in text:
+        tail = text.rsplit(",", 1)[-1]
+        text = text.replace(",", ".") if len(tail) <= 2 else text.replace(",", "")
+    elif text.count(".") > 1:
+        text = text.replace(".", "")
+    try:
+        return float(text)
+    except ValueError:
+        return pd.NA
+
+
 def normalize_data(frame: pd.DataFrame) -> pd.DataFrame:
     """Normalize common Indonesian/English workbook headers into app columns."""
     frame = _clean_headers(frame)
@@ -55,53 +66,29 @@ def normalize_data(frame: pd.DataFrame) -> pd.DataFrame:
     for column in ("ID Outlet", "Nama Outlet", "Zona", "Sektor", "Kategori Outlet", "Brand"):
         normalized[column] = normalized[column].astype("string").str.strip()
         normalized[column] = normalized[column].replace({"": pd.NA, "<NA>": pd.NA, "nan": pd.NA})
-
     normalized["Nominal Kontrak"] = normalized["Nominal Kontrak"].map(parse_amount)
     for column in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
         normalized[column] = pd.to_datetime(normalized[column], errors="coerce", dayfirst=True).dt.tz_localize(None)
 
     normalized = normalized[COLUMNS]
-    # Ignore completely blank rows, while preserving rows with partial data for editing.
-    has_data = normalized.astype("string").fillna("").apply(lambda row: row.str.strip().ne("").any(), axis=1)
-    return normalized.loc[has_data].reset_index(drop=True)
-
-
-def parse_amount(value):
-    if pd.isna(value) or str(value).strip() == "":
-        return pd.NA
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
-    text = str(value).strip().replace("Rp", "").replace("rp", "").replace(" ", "")
-    # Handle both Indonesian (1.234.567,89) and English (1,234,567.89) formatting.
-    if "," in text and "." in text:
-        if text.rfind(",") > text.rfind("."):
-            text = text.replace(".", "").replace(",", ".")
-        else:
-            text = text.replace(",", "")
-    elif "," in text:
-        tail = text.rsplit(",", 1)[-1]
-        text = text.replace(",", ".") if len(tail) <= 2 else text.replace(",", "")
-    elif text.count(".") > 1:
-        text = text.replace(".", "")
-    try:
-        return float(text)
-    except ValueError:
-        return pd.NA
+    # Use a one-dimensional validity mask; avoids pandas apply returning a
+    # multidimensional object on some pandas versions when rows are all-null.
+    has_data = normalized.notna().any(axis=1)
+    return normalized.loc[has_data.to_numpy(dtype=bool)].reset_index(drop=True)
 
 
 def read_workbook(source) -> pd.DataFrame:
     """Read the supplied template or the original COSPKR06 workbook."""
-    errors = []
     for sheet, header in (("COSPKR06", 3), (0, 0), ("Monitoring Kontrak Outlet", 0)):
         try:
             if hasattr(source, "seek"):
                 source.seek(0)
             raw = pd.read_excel(source, sheet_name=sheet, header=header)
             candidate = normalize_data(raw)
-            if not raw.empty and any(candidate[column].notna().any() for column in COLUMNS):
+            if not candidate.empty:
                 return candidate
-        except (ValueError, KeyError, OSError, ImportError) as error:
-            errors.append(str(error))
+        except (ValueError, KeyError, OSError, ImportError):
+            continue
     raise ValueError("Tidak dapat membaca sheet/kolom data kontrak. Periksa file Excel dan nama sheet-nya.")
 
 
@@ -121,7 +108,8 @@ def validate_data(frame: pd.DataFrame) -> list[str]:
         return errors
     if (normalized["Nama Outlet"].isna() & normalized["ID Outlet"].isna()).any():
         errors.append("Setiap baris harus berisi Nama Outlet atau ID Outlet.")
-    if (pd.to_numeric(normalized["Nominal Kontrak"], errors="coerce") < 0).any():
+    amounts = pd.to_numeric(normalized["Nominal Kontrak"], errors="coerce")
+    if (amounts < 0).any():
         errors.append("Nominal kontrak tidak boleh negatif.")
     invalid_period = (
         normalized["Periode Kontrak Awal"].notna()
@@ -177,7 +165,6 @@ if "contracts" not in st.session_state:
     initial, load_warning = load_initial_data()
     st.session_state.contracts = initial
     st.session_state.load_warning = load_warning
-
 if st.session_state.load_warning:
     st.warning(st.session_state.load_warning)
 
@@ -201,17 +188,14 @@ with st.sidebar:
                     st.rerun()
             except Exception as error:
                 st.error(f"Gagal mengimpor Excel: {error}")
-
     st.download_button(
-        "Download data Excel",
-        data=excel_bytes(st.session_state.contracts),
+        "Download data Excel", data=excel_bytes(st.session_state.contracts),
         file_name="Monitoring_Kontrak_Outlet.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
     st.download_button(
-        "Download template Excel",
-        data=excel_bytes(pd.DataFrame(columns=COLUMNS)),
+        "Download template Excel", data=excel_bytes(pd.DataFrame(columns=COLUMNS)),
         file_name="Template_Monitoring_Kontrak_Outlet.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
@@ -222,7 +206,6 @@ contracts = add_contract_status(st.session_state.contracts)
 expired = int(contracts["Status Kontrak"].eq("Expired").sum())
 soon = int(contracts["Status Kontrak"].isin(["Kritis (≤ 30 hari)", "Warning (31–90 hari)"]).sum())
 total_value = pd.to_numeric(contracts["Nominal Kontrak"], errors="coerce").sum()
-
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Jumlah outlet", f"{len(contracts):,}".replace(",", "."))
 m2.metric("Total nominal kontrak", f"Rp {total_value:,.0f}".replace(",", "."))
@@ -237,7 +220,7 @@ st.subheader("Filter data kontrak")
 f1, f2, f3 = st.columns(3)
 zones = ["Semua"] + sorted(contracts["Zona"].dropna().astype(str).unique().tolist())
 sectors = ["Semua"] + sorted(contracts["Sektor"].dropna().astype(str).unique().tolist())
-statuses = ["Semua"] + ["Expired", "Kritis (≤ 30 hari)", "Warning (31–90 hari)", "Aktif (> 90 hari)", "Data belum lengkap"]
+statuses = ["Semua", "Expired", "Kritis (≤ 30 hari)", "Warning (31–90 hari)", "Aktif (> 90 hari)", "Data belum lengkap"]
 selected_zone = f1.selectbox("Zona", zones)
 selected_sector = f2.selectbox("Sektor", sectors)
 selected_status = f3.selectbox("Status kontrak", statuses)
@@ -260,11 +243,8 @@ st.subheader("Edit data outlet")
 st.caption("Ubah sel di tabel, tambah baris di bagian bawah, lalu simpan. Kolom status dan sisa hari dihitung otomatis.")
 with st.form("edit_contracts_form"):
     edited = st.data_editor(
-        st.session_state.contracts,
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        key="contracts_editor",
+        st.session_state.contracts, num_rows="dynamic", use_container_width=True,
+        hide_index=True, key="contracts_editor",
         column_config={
             "Nominal Kontrak": st.column_config.NumberColumn("Nominal Kontrak (Rp)", min_value=0, step=100000),
             "Periode Kontrak Awal": st.column_config.DateColumn("Periode Kontrak Awal", format="DD/MM/YYYY"),
@@ -272,7 +252,6 @@ with st.form("edit_contracts_form"):
         },
     )
     save_button = st.form_submit_button("Simpan perubahan", type="primary")
-
 if save_button:
     problems = validate_data(edited)
     if problems:
