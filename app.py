@@ -8,18 +8,23 @@ import pandas as pd
 import streamlit as st
 
 APP_TITLE = "Monitoring Kontrak Outlet"
-DATA_FILE = Path("data") / "Monitoring Kontrak Outlet.xlsx"
+# Source workbook currently present in the repository. Users can also upload a
+# normalized template from the sidebar.
+DATA_FILE = Path("data") / "DRP & Outlet MCD - DSO Surabaya Barat.xlsx"
 SHEET_NAME = "Monitoring Kontrak Outlet"
 COLUMNS = [
-    "ID Outlet", "Nama Outlet", "Zona", "Sektor", "Kategori Outlet", "Brand",
-    "Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir",
+    "ID Outlet", "Nama Outlet", "Alamat", "Zona", "Sektor",
+    "Kategori Outlet", "Kategori Pekerjaan", "Brand", "Nominal Kontrak",
+    "Periode Kontrak Awal", "Periode Kontrak Akhir",
 ]
 ALIASES = {
     "ID Outlet": ("ID Outlet", "ID Customer", "Customer ID", "Kode Outlet", "Outlet ID"),
     "Nama Outlet": ("Nama Outlet", "Nama Toko", "Customer", "Outlet", "Customer Name"),
+    "Alamat": ("Alamat", "Alamat Outlet", "Alamat Toko", "Address", "Outlet Address", "Customer Address"),
     "Zona": ("Zona", "Zone"),
     "Sektor": ("Sektor", "Sector", "Kecamatan"),
     "Kategori Outlet": ("Kategori Outlet", "Customer Group Category", "Pos Budget", "Kategori"),
+    "Kategori Pekerjaan": ("Kategori Pekerjaan", "Kategori Pekerjaan Outlet", "Work Category", "Job Category", "Kategori Kerja"),
     "Brand": ("Brand", "Finance Brand", "Merek"),
     "Nominal Kontrak": ("Nominal Kontrak", "Nominal", "Nominal.1", "Contract Amount", "Nilai Kontrak"),
     "Periode Kontrak Awal": ("Periode Kontrak Awal", "Periode Awal Kontrak", "Mulai", "Tanggal Mulai", "Start Date"),
@@ -63,7 +68,10 @@ def normalize_data(frame: pd.DataFrame) -> pd.DataFrame:
         source = next((lowered[name.casefold()] for name in names if name.casefold() in lowered), None)
         normalized[target] = frame[source] if source is not None else pd.NA
 
-    for column in ("ID Outlet", "Nama Outlet", "Zona", "Sektor", "Kategori Outlet", "Brand"):
+    for column in (
+        "ID Outlet", "Nama Outlet", "Alamat", "Zona", "Sektor",
+        "Kategori Outlet", "Kategori Pekerjaan", "Brand",
+    ):
         normalized[column] = normalized[column].astype("string").str.strip()
         normalized[column] = normalized[column].replace({"": pd.NA, "<NA>": pd.NA, "nan": pd.NA})
     normalized["Nominal Kontrak"] = normalized["Nominal Kontrak"].map(parse_amount)
@@ -71,14 +79,14 @@ def normalize_data(frame: pd.DataFrame) -> pd.DataFrame:
         normalized[column] = pd.to_datetime(normalized[column], errors="coerce", dayfirst=True).dt.tz_localize(None)
 
     normalized = normalized[COLUMNS]
-    # Use a one-dimensional validity mask; avoids pandas apply returning a
-    # multidimensional object on some pandas versions when rows are all-null.
     has_data = normalized.notna().any(axis=1)
     return normalized.loc[has_data.to_numpy(dtype=bool)].reset_index(drop=True)
 
 
 def read_workbook(source) -> pd.DataFrame:
-    """Read the supplied template or the original COSPKR06 workbook."""
+    """Read the source workbook or normalized upload template."""
+    # The source workbook uses sheet COSPKR06 with headers starting on row 4;
+    # the generated app template has headers on the first row.
     for sheet, header in (("COSPKR06", 3), (0, 0), ("Monitoring Kontrak Outlet", 0)):
         try:
             if hasattr(source, "seek"):
@@ -217,18 +225,22 @@ if soon:
     st.warning(f"Pengingat: {soon} kontrak akan berakhir dalam 90 hari.")
 
 st.subheader("Filter data kontrak")
-f1, f2, f3 = st.columns(3)
+f1, f2, f3, f4 = st.columns(4)
 zones = ["Semua"] + sorted(contracts["Zona"].dropna().astype(str).unique().tolist())
 sectors = ["Semua"] + sorted(contracts["Sektor"].dropna().astype(str).unique().tolist())
+job_categories = ["Semua"] + sorted(contracts["Kategori Pekerjaan"].dropna().astype(str).unique().tolist())
 statuses = ["Semua", "Expired", "Kritis (≤ 30 hari)", "Warning (31–90 hari)", "Aktif (> 90 hari)", "Data belum lengkap"]
 selected_zone = f1.selectbox("Zona", zones)
 selected_sector = f2.selectbox("Sektor", sectors)
-selected_status = f3.selectbox("Status kontrak", statuses)
+selected_job_category = f3.selectbox("Kategori Pekerjaan", job_categories)
+selected_status = f4.selectbox("Status kontrak", statuses)
 view = contracts.copy()
 if selected_zone != "Semua":
     view = view[view["Zona"] == selected_zone]
 if selected_sector != "Semua":
     view = view[view["Sektor"] == selected_sector]
+if selected_job_category != "Semua":
+    view = view[view["Kategori Pekerjaan"] == selected_job_category]
 if selected_status != "Semua":
     view = view[view["Status Kontrak"] == selected_status]
 
