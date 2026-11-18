@@ -164,8 +164,16 @@ def safe_date(value):
     return None if pd.isna(value) else pd.Timestamp(value).date()
 
 
-def render_outlet_form(current: pd.Series, row_index: int | None) -> dict:
+def master_options(frame: pd.DataFrame, column: str) -> list[str]:
+    if frame.empty or column not in frame:
+        return []
+    values = sorted(frame[column].dropna().astype(str).str.strip().loc[lambda s: s != ""].unique().tolist())
+    return values
+
+
+def render_outlet_form(current: pd.Series, row_index: int | None, master_frame: pd.DataFrame) -> dict:
     suffix = "new" if row_index is None else f"row_{row_index}"
+    is_new = row_index is None
     with st.form(f"outlet_form_{suffix}"):
         st.subheader("Data outlet")
         left, right = st.columns(2)
@@ -173,12 +181,36 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> dict:
             outlet_id = st.text_input("ID Outlet", value=safe_text(current["ID Outlet"]), key=f"id_{suffix}")
             outlet_name = st.text_input("Nama Outlet", value=safe_text(current["Nama Outlet"]), key=f"name_{suffix}")
             address = st.text_area("Alamat", value=safe_text(current["Alamat"]), key=f"address_{suffix}")
-            zone = st.text_input("Zona", value=safe_text(current["Zona"]), key=f"zone_{suffix}")
-            sector = st.text_input("Sektor", value=safe_text(current["Sektor"]), key=f"sector_{suffix}")
-            outlet_category = st.text_input("Kategori Outlet", value=safe_text(current["Kategori Outlet"]), key=f"outlet_category_{suffix}")
+
+            zones = master_options(master_frame, "Zona")
+            sectors = master_options(master_frame, "Sektor")
+            outlet_categories = master_options(master_frame, "Kategori Outlet")
+
+            if is_new:
+                zone = st.selectbox("Zona", zones, index=None, placeholder="Pilih zona", key=f"zone_{suffix}") or pd.NA
+                sector = st.selectbox("Sektor", sectors, index=None, placeholder="Pilih sektor", key=f"sector_{suffix}") or pd.NA
+                outlet_category = st.selectbox(
+                    "Kategori Outlet", outlet_categories, index=None,
+                    placeholder="Pilih kategori outlet", key=f"outlet_category_{suffix}",
+                ) or pd.NA
+            else:
+                zone = st.text_input("Zona", value=safe_text(current["Zona"]), key=f"zone_{suffix}")
+                sector = st.text_input("Sektor", value=safe_text(current["Sektor"]), key=f"sector_{suffix}")
+                outlet_category = st.text_input("Kategori Outlet", value=safe_text(current["Kategori Outlet"]), key=f"outlet_category_{suffix}")
         with right:
-            job_category = st.text_input("Kategori Pekerjaan", value=safe_text(current["Kategori Pekerjaan"]), key=f"job_category_{suffix}")
-            brand = st.text_input("Brand", value=safe_text(current["Brand"]), key=f"brand_{suffix}")
+            job_categories = master_options(master_frame, "Kategori Pekerjaan")
+            brands = master_options(master_frame, "Brand")
+
+            if is_new:
+                job_category = st.selectbox(
+                    "Kategori Pekerjaan", job_categories, index=None,
+                    placeholder="Pilih kategori pekerjaan", key=f"job_category_{suffix}",
+                ) or pd.NA
+                brand = st.selectbox("Brand", brands, index=None, placeholder="Pilih brand", key=f"brand_{suffix}") or pd.NA
+            else:
+                job_category = st.text_input("Kategori Pekerjaan", value=safe_text(current["Kategori Pekerjaan"]), key=f"job_category_{suffix}")
+                brand = st.text_input("Brand", value=safe_text(current["Brand"]), key=f"brand_{suffix}")
+
             parsed_amount = parse_amount(current["Nominal Kontrak"])
             amount = st.number_input(
                 "Nominal Kontrak (Rp)", min_value=0.0, step=100000.0,
@@ -195,11 +227,11 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> dict:
         "ID Outlet": outlet_id.strip() or pd.NA,
         "Nama Outlet": outlet_name.strip() or pd.NA,
         "Alamat": address.strip() or pd.NA,
-        "Zona": zone.strip() or pd.NA,
-        "Sektor": sector.strip() or pd.NA,
-        "Kategori Outlet": outlet_category.strip() or pd.NA,
-        "Kategori Pekerjaan": job_category.strip() or pd.NA,
-        "Brand": brand.strip() or pd.NA,
+        "Zona": zone if is_new else zone.strip() or pd.NA,
+        "Sektor": sector if is_new else sector.strip() or pd.NA,
+        "Kategori Outlet": outlet_category if is_new else outlet_category.strip() or pd.NA,
+        "Kategori Pekerjaan": job_category if is_new else job_category.strip() or pd.NA,
+        "Brand": brand if is_new else brand.strip() or pd.NA,
         "Nominal Kontrak": amount,
         "Periode Kontrak Awal": pd.Timestamp(contract_start) if contract_start else pd.NaT,
         "Periode Kontrak Akhir": pd.Timestamp(contract_end) if contract_end else pd.NaT,
@@ -270,9 +302,9 @@ if active_menu == "Dashboard":
 
     st.subheader("Filter data kontrak")
     f1, f2, f3, f4 = st.columns(4)
-    zones = ["Semua"] + sorted(contracts["Zona"].dropna().astype(str).unique().tolist())
-    sectors = ["Semua"] + sorted(contracts["Sektor"].dropna().astype(str).unique().tolist())
-    job_categories = ["Semua"] + sorted(contracts["Kategori Pekerjaan"].dropna().astype(str).unique().tolist())
+    zones = ["Semua"] + master_options(contracts, "Zona")
+    sectors = ["Semua"] + master_options(contracts, "Sektor")
+    job_categories = ["Semua"] + master_options(contracts, "Kategori Pekerjaan")
     statuses = ["Semua", "Expired", "Kritis (≤ 30 hari)", "Warning (31–90 hari)", "Aktif (> 90 hari)", "Data belum lengkap"]
     selected_zone = f1.selectbox("Zona", zones)
     selected_sector = f2.selectbox("Sektor", sectors)
@@ -300,13 +332,13 @@ elif active_menu == "Edit data outlet":
     else:
         record_options = []
         for row_index, row in contracts.iterrows():
-            outlet_id = safe_text(row["ID Outlet"]) or "Tanpa ID"
-            outlet_name = safe_text(row["Nama Outlet"]) or "Tanpa nama"
-            record_options.append(f"{row_index} | {outlet_id} | {outlet_name}")
+            outlet_id = safe_text(row["ID Outlet"])
+            outlet_name = safe_text(row["Nama Outlet"])
+            record_options.append(f"{row_index} | {outlet_id or 'Tanpa ID'} | {outlet_name or 'Tanpa nama'}")
         selected_record = st.selectbox("Pilih outlet yang akan diedit", record_options, key="selected_outlet_record")
         selected_index = int(selected_record.split(" | ", 1)[0])
         current = contracts.loc[selected_index]
-        submitted, updated_record = render_outlet_form(current, selected_index)
+        submitted, updated_record = render_outlet_form(current, selected_index, st.session_state.contracts)
         if submitted:
             updated_data = contracts[COLUMNS].copy()
             for column, value in updated_record.items():
@@ -325,9 +357,9 @@ elif active_menu == "Edit data outlet":
 
 elif active_menu == "Tambah outlet baru":
     st.header("Tambah outlet baru")
-    st.caption("Isi form di bawah. Data master yang sudah ada tidak diubah.")
+    st.caption("Data Zona, Sektor, Kategori Outlet, Kategori Pekerjaan, dan Brand diambil sebagai pilihan master dari workbook Excel.")
     blank_record = pd.Series({column: pd.NA for column in COLUMNS})
-    submitted, new_record = render_outlet_form(blank_record, None)
+    submitted, new_record = render_outlet_form(blank_record, None, st.session_state.contracts)
     if submitted:
         updated_data = pd.concat([contracts[COLUMNS], pd.DataFrame([new_record])], ignore_index=True)
         problems = validate_data(updated_data)
