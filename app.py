@@ -147,6 +147,21 @@ def excel_bytes(frame: pd.DataFrame) -> bytes:
     return output.getvalue()
 
 
+def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
+    """Format contract amount and dates for the Streamlit display only."""
+    display_frame = frame.copy()
+    if "Nominal Kontrak" in display_frame:
+        display_frame["Nominal Kontrak"] = display_frame["Nominal Kontrak"].map(
+            lambda value: "" if pd.isna(value) else f"{float(value):,.0f}".replace(",", ".")
+        )
+    for column in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
+        if column in display_frame:
+            display_frame[column] = pd.to_datetime(display_frame[column], errors="coerce").map(
+                lambda value: "" if pd.isna(value) else value.strftime("%d/%m/%Y")
+            )
+    return display_frame
+
+
 def outlet_list_excel_bytes(frame: pd.DataFrame) -> bytes:
     """Prepare the displayed outlet list for export with Indonesian-style values."""
     export_frame = frame.copy()
@@ -345,7 +360,8 @@ if active_menu == "Dashboard":
     if view.empty:
         st.info("Belum ada data yang cocok. Gunakan menu Upload Excel di sidebar untuk memasukkan data.")
     else:
-        st.dataframe(view.sort_values("Sisa Hari", na_position="last"), use_container_width=True, hide_index=True)
+        sorted_view = view.sort_values("Sisa Hari", na_position="last")
+        st.dataframe(format_outlet_table(sorted_view), use_container_width=True, hide_index=True)
 
 elif active_menu == "Edit data outlet":
     st.header("Edit data outlet")
