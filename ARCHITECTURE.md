@@ -1,61 +1,85 @@
-# Arsitektur Sistem Monitoring OOH
+# Arsitektur Sistem Monitoring Kontrak Outlet
 
-Aplikasi ini adalah sistem berbasis Streamlit untuk mengelola aset media **Out of Home (OOH)**, memantau kontrak, dan mencatat pergantian brand atau visual.
+## Gambaran umum
 
-## Diagram arsitektur
+Monitoring Kontrak Outlet adalah aplikasi web berbasis Streamlit untuk melihat dan mengelola data customer, memantau masa berlaku kontrak, memperbarui data dari laporan branding, serta mengekspor dan membackup data. Logika aplikasi berada di `app.py`; data utama disimpan sebagai workbook Excel lokal.
 
-```text
-Pengguna
-   │
-   ▼
-app.py — Antarmuka Streamlit
-   ├── Dashboard, peta, grafik, dan tabel monitoring
-   ├── Form tambah/edit/hapus data OOH
-   ├── Penggantian brand/visual dan riwayat
-   ├── Laporan kontrak dan ekspor Excel
-   ├── Monitoring, edit, impor, dan ekspor kontrak outlet
-   └── Sinkronisasi Google Sheets
-          │
-          ├── data_manager.py — Logika dan akses data
-          │      ├── Membaca/menyimpan data Excel
-          │      ├── Menghitung metrik dan status kontrak OOH/outlet
-          │      ├── Validasi dan normalisasi workbook kontrak outlet
-          │      └── Mengelola riwayat pergantian dan rollback
-          │
-          ├── data/*.xlsx — Penyimpanan lokal
-          │      ├── Master OOH
-          │      ├── Monitoring Kontrak Outlet
-          │      ├── Riwayat pergantian
-          │      └── Master vendor, visual, dan pejabat
-          │
-          ├── Google Apps Script — Backup dan pemulihan data
-          │      └── Terhubung melalui HTTP POST
-          │
-          └── File GeoJSON — Batas wilayah untuk peta
+## Diagram komponen
+
+```mermaid
+flowchart TD
+    U[Pengguna] -->|Browser| APP[Streamlit app.py]
+    APP --> MENU[Dashboard dan menu pengelolaan]
+    MENU --> DASH[Dashboard: filter, status, tabel]
+    MENU --> CRUD[Tambah dan edit customer]
+    MENU --> BRAND[Import data branding]
+    MENU --> XLS[Upload dan download Excel]
+    MENU --> BACKUP[Backup ke Google Sheet]
+
+    DATA[(data/DRP & Outlet MCD - DSO Surabaya Barat.xlsx)]
+    APP -->|Baca workbook saat mulai| DATA
+    CRUD -->|Validasi dan simpan| DATA
+    XLS -->|Impor, validasi, ganti data| DATA
+    BRAND -->|Cocokkan berdasarkan ID Customer| DATA
+    DASH -->|Hitung status dan filter| APP
+    DASH -->|Ekspor tabel sebagai XLSX| U
+
+    BACKUP -->|HTTPS POST, URL dari Streamlit secrets| GAS[Google Apps Script Web App]
+    GAS -->|Ganti isi tab Monitoring Kontrak Outlet| SHEET[(Google Sheets)]
+    SCRIPT[google-apps-script/Code.gs] -. di-deploy sebagai .-> GAS
 ```
 
 ## Komponen
 
-- **`app.py`** — Lapisan antarmuka dan alur aplikasi. Menyajikan dashboard, pengelolaan OOH, pergantian brand/visual, laporan kontrak, pengaturan master, monitoring event, dan daftar materi promosi.
-- **`data_manager.py`** — Lapisan pengelolaan data. Membaca dan menyimpan berkas Excel, menghitung durasi serta status kontrak, memvalidasi dan menormalisasi workbook kontrak outlet, mencatat pergantian, dan memuat master materi promosi.
-- **`data/*.xlsx`** — Penyimpanan lokal untuk master titik OOH, monitoring kontrak outlet, riwayat pergantian, vendor/visual/pejabat, serta daftar materi promosi yang difilter.
-- **Google Apps Script / Google Sheets** — Integrasi eksternal untuk membackup dan memulihkan data melalui permintaan HTTP POST dari aplikasi.
-- **Berkas GeoJSON** — Sumber batas kecamatan yang dipakai untuk visualisasi peta.
+| Komponen | Tanggung jawab |
+| --- | --- |
+| `app.py` | Antarmuka Streamlit, validasi, normalisasi, status kontrak, filter dashboard, impor/ekspor, pembaruan data, dan permintaan backup. |
+| `data/DRP & Outlet MCD - DSO Surabaya Barat.xlsx` | Sumber data awal dan penyimpanan lokal untuk daftar outlet. Sheet aplikasi bernama `Monitoring Kontrak Outlet`. |
+| `google-apps-script/Code.gs` | Endpoint Apps Script yang menerima payload backup, memvalidasi struktur kolom, dan menulis data ke Google Sheets. |
+| `GOOGLE_APPS_SCRIPT_URL` | URL Web App yang disimpan di Streamlit secrets; aplikasi tidak meng-hardcode URL deployment. |
+| Google Sheets | Salinan backup pada tab `Monitoring Kontrak Outlet`; backup mengganti isi tab tersebut. |
 
 ## Alur data
 
-1. Pengguna berinteraksi dengan fitur melalui antarmuka Streamlit di `app.py`.
-2. Untuk membaca atau mengubah data lokal, aplikasi memanggil fungsi di `data_manager.py`.
-3. Data master, riwayat, dan kontrak outlet disimpan terpisah dalam berkas Excel di direktori `data/`; status kontrak dihitung saat data dimuat.
-4. Menu Monitoring Kontrak Outlet menerima template aplikasi atau sheet `COSPKR06`, serta menyediakan edit tabel, unduh template, dan ekspor seluruh data.
-5. Daftar materi promosi hanya memuat material Vinyl Billboard, Vinyl Baliho, Vinyl PJU, dan Vinyl Midis; file Excel dapat diunggah untuk mengganti daftar, filter stok tersedia, dan pilihan brand/versi pada penggantian visual disaring sesuai jenis serta ukuran titik OOH.
-6. Dashboard menggunakan data tersebut untuk menyajikan ringkasan, grafik, tabel, dan peta. Peta memerlukan berkas GeoJSON.
-7. Pengguna dapat memicu backup ke atau pemulihan dari Google Sheets melalui Google Apps Script.
+### Memuat dan mengelola customer
 
-## Teknologi utama
+1. Saat aplikasi dimulai, `load_initial_data()` membaca workbook lokal. Pembacaan mencoba sheet `COSPKR06` dengan header pada baris yang sesuai, kemudian format workbook yang didukung lainnya.
+2. `normalize_data()` menyelaraskan variasi nama kolom ke skema aplikasi, mengubah nominal dan tanggal ke tipe yang sesuai, serta menormalkan kolom materi dan ukuran panel.
+3. Dashboard menghitung sisa hari kontrak dari tanggal akhir terhadap tanggal hari ini, lalu menetapkan status: expired, kritis (maksimal 30 hari), warning (31–90 hari), aktif (lebih dari 90 hari), atau data belum lengkap.
+4. Pengguna dapat memfilter berdasarkan Zona, Sektor, Pos Budget, Kategori Pekerjaan, dan Status Kontrak.
+5. Baris dengan Pos Budget Venue dan Others Permanen ditampilkan pada tabel tersendiri. Tiga tabel hasil filter memiliki ekspor XLSX masing-masing.
+6. Form tambah/edit memvalidasi data sebelum menyimpan workbook lokal. Impor workbook dari dashboard memvalidasi data dan mengganti seluruh daftar customer.
 
-- Python dan Streamlit
-- Pandas dan berkas Excel (`openpyxl`)
-- Plotly dan Matplotlib untuk visualisasi
-- GeoJSON untuk data batas peta
-- `requests` untuk integrasi Google Apps Script
+### Import laporan branding
+
+1. Menu **Import data branding** membaca laporan SPKS Branding dari sheet `COSPKR06`.
+2. Baris dengan ID Customer yang sama dideduplikasi; baris dengan `Tanggal Pekerjaan Sampai` terbaru dipilih.
+3. Data terpilih dicocokkan dengan `ID Outlet` pada daftar customer. ID yang cocok memperbarui kolom customer, kategori, alamat, zona, brand, nominal, serta tanggal kontrak yang tersedia.
+4. ID yang tidak ditemukan ditampilkan terpisah dan tidak ditambahkan ke daftar customer. Baris tanpa ID juga ditampilkan terpisah. Nilai kosong dari laporan tidak mengosongkan nilai yang sudah tersimpan.
+
+### Backup ke Google Sheets
+
+1. Menu **Backup ke Google Sheet** membaca `GOOGLE_APPS_SCRIPT_URL` dari Streamlit secrets.
+2. Aplikasi mengirim seluruh data yang telah dinormalisasi sebagai JSON melalui HTTPS POST.
+3. Apps Script menulis header dan baris ke tab `Monitoring Kontrak Outlet`; tab lain tidak diubah. Jika tab tujuan belum ada, script membuatnya.
+4. Endpoint tidak menggunakan token. Siapa pun yang mengetahui URL Web App dapat mengirim permintaan dan mengganti isi tab tujuan. Karena itu URL harus disimpan sebagai rahasia dan tidak dimasukkan ke kode atau dokumentasi.
+
+## Skema data aplikasi
+
+Data utama menggunakan kolom:
+
+- Identitas dan lokasi: `ID Outlet`, `Nama Customer`, `Alamat`, `Zona`, `Sektor`.
+- Anggaran dan kategori: `Pos Budget`, `Kategori Outlet`, `Kategori Pekerjaan`, `Brand`.
+- Nilai dan masa kontrak: `Nominal Kontrak`, `Periode Kontrak Awal`, `Periode Kontrak Akhir`.
+- Materi: `Panel Toko`, `Showcase`, `Layar Toko`, `Shop Sign / Neon Box`.
+- Ukuran: `Ukuran Panel Toko`, `Ukuran Sticker Panel Toko`.
+
+Kolom `Sisa Hari` dan `Status Kontrak` dihitung saat ditampilkan dan bukan bagian dari data master yang disimpan.
+
+## Teknologi dan konfigurasi
+
+- Python, Streamlit, dan Pandas untuk aplikasi web serta transformasi data.
+- `openpyxl` untuk membaca dan menulis file Excel.
+- `requests` untuk komunikasi HTTPS dengan Apps Script.
+- Google Apps Script dan Google Sheets untuk backup jarak jauh.
+- Konfigurasi lokal menggunakan `.streamlit/secrets.toml`; pada Streamlit Community Cloud, URL diatur melalui **Settings > Secrets**.
