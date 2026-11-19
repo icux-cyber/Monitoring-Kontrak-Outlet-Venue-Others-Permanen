@@ -10,10 +10,6 @@ const BACKUP_COLUMNS = [
 function doPost(event) {
   try {
     const payload = JSON.parse(event.postData.contents);
-    const expectedToken = PropertiesService.getScriptProperties().getProperty("BACKUP_TOKEN");
-    if (!expectedToken || payload.token !== expectedToken) {
-      throw new Error("Token backup tidak valid.");
-    }
     if (payload.action !== "backup" || payload.sheet_name !== BACKUP_SHEET_NAME) {
       throw new Error("Permintaan backup tidak valid.");
     }

@@ -71,16 +71,16 @@ Aplikasi ini adalah sistem berbasis Streamlit untuk mengelola aset media **Out o
 Menu **Backup ke Google Sheet** mengirim seluruh data kontrak outlet ke tab `Monitoring Kontrak Outlet`. Backup mengganti isi tab tersebut, tetapi tidak mengubah tab lain di spreadsheet.
 
 1. Buka spreadsheet tujuan, pilih **Extensions > Apps Script**, lalu salin isi `google-apps-script/Code.gs` ke project Apps Script yang terikat ke spreadsheet tersebut.
-2. Di **Project Settings > Script Properties**, tambahkan `BACKUP_TOKEN` dengan nilai rahasia yang kuat.
-3. Deploy sebagai **Web app**, pilih **Execute as: Me** dan izinkan akses **Anyone**. Endpoint memvalidasi token sebelum mengubah spreadsheet.
-4. Simpan URL deployment dan token yang sama di Streamlit secrets:
+2. Deploy sebagai **Web app**, pilih **Execute as: Me** dan izinkan akses **Anyone**.
+3. Simpan URL deployment di Streamlit secrets:
 
    ```toml
    GOOGLE_APPS_SCRIPT_URL = "URL_WEB_APP"
-   GOOGLE_APPS_SCRIPT_TOKEN = "TOKEN_RAHASIA"
    ```
 
    Untuk Streamlit Community Cloud, masukkan nilai tersebut pada bagian **Settings > Secrets**. Untuk lokal, gunakan `.streamlit/secrets.toml`; jangan commit file secrets.
-5. Buka menu **Backup ke Google Sheet** dan pilih **Backup data sekarang**.
+4. Buka menu **Backup ke Google Sheet** dan pilih **Backup data sekarang**.
+
+Web App ini tidak menggunakan token. Siapa pun yang mengetahui URL deployment dapat menjalankan backup dan menimpa isi tab `Monitoring Kontrak Outlet`; simpan URL di secrets dan jangan membagikannya.
 
 Bagian **Upload / Download Excel** tersedia pada halaman Dashboard. Impor dari sana mengganti seluruh daftar customer.

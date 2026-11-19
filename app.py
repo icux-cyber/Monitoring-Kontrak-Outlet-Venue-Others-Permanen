@@ -338,7 +338,7 @@ def excel_bytes(frame: pd.DataFrame) -> bytes:
     return output.getvalue()
 
 
-def backup_to_google_sheet(frame: pd.DataFrame, url: str, token: str) -> int:
+def backup_to_google_sheet(frame: pd.DataFrame, url: str) -> int:
     if not url.startswith("https://script.google.com/"):
         raise ValueError("URL backup harus menggunakan alamat HTTPS Google Apps Script.")
     normalized = normalize_data(frame)
@@ -349,7 +349,6 @@ def backup_to_google_sheet(frame: pd.DataFrame, url: str, token: str) -> int:
         "columns": COLUMNS,
         "records": records,
         "backup_at": pd.Timestamp.now(tz="UTC").isoformat(),
-        "token": token,
     }
     response = requests.post(url, json=payload, timeout=60)
     response.raise_for_status()
@@ -692,24 +691,19 @@ else:
     )
     try:
         backup_url = str(st.secrets.get("GOOGLE_APPS_SCRIPT_URL", "") or "").strip()
-        backup_token = str(st.secrets.get("GOOGLE_APPS_SCRIPT_TOKEN", "") or "").strip()
     except FileNotFoundError:
         backup_url = ""
-        backup_token = ""
-    if not backup_url or not backup_token:
-        st.warning(
-            "Konfigurasi belum lengkap. Atur GOOGLE_APPS_SCRIPT_URL dan "
-            "GOOGLE_APPS_SCRIPT_TOKEN di Streamlit secrets."
-        )
+    if not backup_url:
+        st.warning("Atur GOOGLE_APPS_SCRIPT_URL di Streamlit secrets untuk mengaktifkan backup.")
     else:
         st.info(f"Data yang akan dibackup: {len(st.session_state.contracts)} outlet.")
         st.warning("Backup akan mengganti isi tab tujuan dengan data outlet saat ini.")
+        st.warning("Siapa pun yang mengetahui URL Web App dapat menjalankan backup dan menimpa isi tab tujuan. Jaga URL tersebut.")
         if st.button("Backup data sekarang", type="primary"):
             try:
                 row_count = backup_to_google_sheet(
                     st.session_state.contracts,
                     backup_url,
-                    backup_token,
                 )
                 st.success(f"Backup berhasil: {row_count} baris tersimpan di Google Sheet.")
             except Exception as error:
