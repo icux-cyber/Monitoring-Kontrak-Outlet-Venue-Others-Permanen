@@ -170,6 +170,117 @@ def read_workbook(source) -> pd.DataFrame:
     raise ValueError("Tidak dapat membaca sheet/kolom data kontrak. Periksa file Excel dan nama sheet-nya.")
 
 
+def read_branding_workbook(source) -> pd.DataFrame:
+    if hasattr(source, "seek"):
+        source.seek(0)
+    frame = pd.read_excel(source, sheet_name="COSPKR06", header=11)
+    frame = frame.iloc[1:].copy()
+    columns = list(frame.columns)
+    required = [
+        "ID Customer", "Customer", "Customer Group Category", "Alamat",
+        "Zona", "Finance Brand", "Nominal",
+    ]
+    missing = [column for column in required if column not in columns]
+    if missing:
+        raise ValueError(f"Kolom wajib tidak ditemukan: {', '.join(missing)}.")
+    start_index = columns.index("Tanggal Pekerjaan")
+    if start_index + 1 >= len(columns):
+        raise ValueError("Kolom Tanggal Pekerjaan Sampai tidak ditemukan.")
+    nominal_index = columns.index("Nominal")
+    if nominal_index + 1 >= len(columns):
+        raise ValueError("Kolom nilai Nominal tidak ditemukan.")
+    columns[start_index] = "Tanggal Pekerjaan Dari"
+    columns[start_index + 1] = "Tanggal Pekerjaan Sampai"
+    columns[nominal_index] = "Mata Uang"
+    columns[nominal_index + 1] = "Nominal"
+    frame.columns = columns
+    result_columns = [
+        "ID Customer", "Customer", "Customer Group Category", "Alamat",
+        "Zona", "Finance Brand", "Nominal", "Tanggal Pekerjaan Dari",
+        "Tanggal Pekerjaan Sampai", "No. Dokumen",
+    ]
+    if "No. Dokumen" not in frame:
+        frame["No. Dokumen"] = pd.NA
+    result = frame[result_columns].dropna(how="all").reset_index(drop=True)
+    result["ID Customer"] = result["ID Customer"].astype("string").str.strip()
+    result["ID Customer"] = result["ID Customer"].replace("", pd.NA)
+    for column in ("Customer", "Customer Group Category", "Alamat", "Zona", "Finance Brand", "No. Dokumen"):
+        result[column] = result[column].astype("string").str.strip()
+        result[column] = result[column].replace("", pd.NA)
+    result["Nominal"] = result["Nominal"].map(parse_amount)
+    for column in ("Tanggal Pekerjaan Dari", "Tanggal Pekerjaan Sampai"):
+        result[column] = pd.to_datetime(result[column], errors="coerce", dayfirst=True).dt.tz_localize(None)
+    result["_source_order"] = range(len(result))
+    return result
+
+
+def customer_id_key(value) -> str:
+    if pd.isna(value):
+        return ""
+    key = str(value).strip()
+    if re.fullmatch(r"\d+\.0", key):
+        key = key[:-2]
+    return key.casefold()
+
+
+def deduplicate_branding_data(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    records = frame.copy()
+    records["_id_key"] = records["ID Customer"].map(customer_id_key)
+    with_id = records[records["_id_key"].ne("")]
+    without_id = records[records["_id_key"].eq("")]
+    ordered = with_id.sort_values(
+        ["Tanggal Pekerjaan Sampai", "_source_order"],
+        kind="stable",
+        na_position="first",
+    )
+    latest = ordered.drop_duplicates("_id_key", keep="last")
+    duplicated = with_id[with_id.duplicated("_id_key", keep=False)].copy()
+    latest_orders = set(latest["_source_order"])
+    duplicated["Dipakai"] = duplicated["_source_order"].isin(latest_orders)
+    selected = pd.concat([latest, without_id], ignore_index=True).sort_values(
+        "_source_order", kind="stable"
+    )
+    return selected, duplicated
+
+
+def apply_branding_updates(contracts: pd.DataFrame, branding: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, int]:
+    selected, duplicates = deduplicate_branding_data(branding)
+    updated = normalize_data(contracts)
+    existing_keys = updated["ID Outlet"].map(customer_id_key)
+    existing_by_key = {
+        key: indexes for key, indexes in existing_keys.groupby(existing_keys).groups.items() if key
+    }
+    missing_rows = []
+    matched_keys = set()
+    field_map = {
+        "Customer": "Nama Customer",
+        "Customer Group Category": "Kategori Outlet",
+        "Alamat": "Alamat",
+        "Zona": "Zona",
+        "Finance Brand": "Brand",
+        "Nominal": "Nominal Kontrak",
+        "Tanggal Pekerjaan Dari": "Periode Kontrak Awal",
+        "Tanggal Pekerjaan Sampai": "Periode Kontrak Akhir",
+    }
+    for _, record in selected.iterrows():
+        key = customer_id_key(record["ID Customer"])
+        if not key or key not in existing_by_key:
+            missing_rows.append(record)
+            continue
+        matched_keys.add(key)
+        for index in existing_by_key[key]:
+            for source_column, target_column in field_map.items():
+                value = record[source_column]
+                if pd.isna(value) or (isinstance(value, str) and not value.strip()):
+                    continue
+                updated.at[index, target_column] = value
+    unmatched = pd.DataFrame(missing_rows, columns=selected.columns).drop(
+        columns=["_id_key", "_source_order"], errors="ignore"
+    )
+    duplicate_details = duplicates.drop(columns=["_id_key", "_source_order"], errors="ignore")
+    return normalize_data(updated), unmatched, duplicate_details, len(matched_keys)
+
+
 def load_initial_data() -> tuple[pd.DataFrame, str | None]:
     if not DATA_FILE.exists():
         return pd.DataFrame(columns=COLUMNS), None
@@ -313,7 +424,7 @@ if st.session_state.load_warning:
 
 with st.sidebar:
     st.header("Menu")
-    active_menu = st.radio("Pilih halaman", ["Dashboard", "Edit data customer", "Tambah customer baru"], key="main_menu")
+    active_menu = st.radio("Pilih halaman", ["Dashboard", "Edit data customer", "Tambah customer baru", "Import data branding"], key="main_menu")
     st.divider()
     st.subheader("Upload / Download Excel")
     upload = st.file_uploader("Upload workbook Excel (.xlsx)", type=["xlsx"], key="workbook_upload")
@@ -416,7 +527,7 @@ elif active_menu == "Edit data customer":
             except Exception as error:
                 st.error(f"Gagal menghapus customer: {error}")
 
-else:
+elif active_menu == "Tambah customer baru":
     st.header("Tambah customer baru")
     blank_record = pd.Series({column: pd.NA for column in COLUMNS})
     submitted, new_record = render_outlet_form(blank_record, None)
@@ -433,3 +544,100 @@ else:
                 st.rerun()
             except Exception as error:
                 st.error(f"Gagal menyimpan customer baru: {error}")
+else:
+    st.header("Import data outlet branding")
+    st.caption(
+        "Data dengan ID Customer ganda dipilih berdasarkan Tanggal Pekerjaan Sampai terbaru. "
+        "ID yang ditemukan memperbarui data customer; ID yang belum ada tidak ditambahkan ke tabel."
+    )
+    branding_upload = st.file_uploader(
+        "Upload laporan SPKS Branding (.xlsx)",
+        type=["xlsx"],
+        key="branding_workbook_upload",
+    )
+    if st.button("Proses dan update data customer", type="primary"):
+        st.session_state.pop("branding_import_result", None)
+        if branding_upload is None:
+            st.warning("Pilih file laporan branding terlebih dahulu.")
+        else:
+            try:
+                branding_data = read_branding_workbook(branding_upload)
+                updated, unmatched, duplicates, updated_count = apply_branding_updates(
+                    st.session_state.contracts, branding_data
+                )
+                problems = validate_data(updated)
+                if problems:
+                    st.error("\n".join(problems))
+                else:
+                    if updated_count:
+                        save_data(updated)
+                        st.session_state.contracts = updated
+                    unmatched_has_id = unmatched["ID Customer"].map(customer_id_key).ne("")
+                    st.session_state.branding_import_result = {
+                        "duplicate_ids": int(duplicates["ID Customer"].nunique()),
+                        "duplicate_rows": len(duplicates),
+                        "updated_count": updated_count,
+                        "unmatched_id_count": int(unmatched_has_id.sum()),
+                        "missing_id_count": int((~unmatched_has_id).sum()),
+                        "unmatched": unmatched,
+                        "duplicates": duplicates,
+                    }
+                    st.success(
+                        f"Proses selesai: {updated_count} ID diperbarui, "
+                        f"{int(unmatched_has_id.sum())} ID tidak ditemukan, "
+                        f"dan {int((~unmatched_has_id).sum())} baris tidak memiliki ID."
+                    )
+            except Exception as error:
+                st.error(f"Gagal memproses laporan branding: {error}")
+
+    import_result = st.session_state.get("branding_import_result")
+    if import_result:
+        summary_cols = st.columns(4)
+        summary_cols[0].metric(
+            "ID duplikat (baris)",
+            f"{import_result['duplicate_ids']} ({import_result['duplicate_rows']})",
+        )
+        summary_cols[1].metric("ID diperbarui", import_result["updated_count"])
+        summary_cols[2].metric("ID tidak ditemukan", import_result["unmatched_id_count"])
+        summary_cols[3].metric("Baris tanpa ID", import_result["missing_id_count"])
+        if import_result["duplicate_rows"]:
+            st.subheader("Data ID duplikat")
+            st.caption("Baris dengan tanda Dipakai adalah data yang dipilih karena tanggal pekerjaan sampai paling baru.")
+            duplicate_columns = [
+                "ID Customer", "Customer", "Tanggal Pekerjaan Sampai",
+                "No. Dokumen", "Dipakai",
+            ]
+            st.dataframe(
+                import_result["duplicates"][duplicate_columns],
+                use_container_width=True,
+                hide_index=True,
+            )
+        missing_ids = import_result["unmatched"][
+            import_result["unmatched"]["ID Customer"].map(customer_id_key).ne("")
+        ]
+        if missing_ids.empty:
+            st.info("Semua ID Customer pada laporan ditemukan di Daftar customer.")
+        else:
+            st.subheader("ID branding yang tidak ditemukan di Daftar customer")
+            missing_columns = [
+                "ID Customer", "Customer", "Customer Group Category", "Alamat",
+                "Zona", "Finance Brand", "Nominal", "Tanggal Pekerjaan Dari",
+                "Tanggal Pekerjaan Sampai", "No. Dokumen",
+            ]
+            st.dataframe(
+                missing_ids[missing_columns],
+                use_container_width=True,
+                hide_index=True,
+            )
+        without_ids = import_result["unmatched"][
+            import_result["unmatched"]["ID Customer"].map(customer_id_key).eq("")
+        ]
+        if not without_ids.empty:
+            st.subheader("Baris laporan tanpa ID Customer")
+            st.caption("Baris ini tidak dapat dibandingkan atau diperbarui karena ID Customer kosong.")
+            missing_columns = [
+                "ID Customer", "Customer", "Customer Group Category", "Alamat",
+                "Zona", "Finance Brand", "Nominal", "Tanggal Pekerjaan Dari",
+                "Tanggal Pekerjaan Sampai", "No. Dokumen",
+            ]
+            st.dataframe(without_ids[missing_columns], use_container_width=True, hide_index=True)
