@@ -558,7 +558,7 @@ if active_menu == "Dashboard":
     download_columns = st.columns(3)
     download_specs = [
         (
-            "Download Daftar customer dan status kontrak Excel",
+            "Download Daftar customer - Retail Suplay kontrak Excel",
             regular_view,
             "Daftar_Customer_dan_Status_Kontrak.xlsx",
             "download_regular_contracts",
@@ -590,7 +590,7 @@ if active_menu == "Dashboard":
     else:
         selected_group = budget_group(selected_budget)
         if selected_budget == "Semua":
-            render_dashboard_table("Daftar customer dan status kontrak", regular_view)
+            render_dashboard_table("Daftar customer - Retail Supply", retail_supply_view)
             render_dashboard_table("Daftar customer - Venue", venue_view)
             render_dashboard_table("Daftar customer - Others Permanen", other_permanent_view)
         elif selected_group == "Venue":
