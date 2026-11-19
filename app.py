@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import date
 from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
+import requests
 import streamlit as st
 
 APP_TITLE = "Monitoring Kontrak Outlet"
@@ -336,6 +338,31 @@ def excel_bytes(frame: pd.DataFrame) -> bytes:
     return output.getvalue()
 
 
+def backup_to_google_sheet(frame: pd.DataFrame, url: str, token: str) -> int:
+    if not url.startswith("https://script.google.com/"):
+        raise ValueError("URL backup harus menggunakan alamat HTTPS Google Apps Script.")
+    normalized = normalize_data(frame)
+    records = json.loads(normalized.to_json(orient="records", date_format="iso", force_ascii=False))
+    payload = {
+        "action": "backup",
+        "sheet_name": SHEET_NAME,
+        "columns": COLUMNS,
+        "records": records,
+        "backup_at": pd.Timestamp.now(tz="UTC").isoformat(),
+        "token": token,
+    }
+    response = requests.post(url, json=payload, timeout=60)
+    response.raise_for_status()
+    try:
+        result = response.json()
+    except ValueError as error:
+        raise ValueError("Respons Google Apps Script bukan JSON yang valid.") from error
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        message = result.get("error", "Backup ditolak oleh Google Apps Script.") if isinstance(result, dict) else "Respons Google Apps Script tidak valid."
+        raise ValueError(message)
+    return int(result.get("row_count", len(records)))
+
+
 def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
     display_frame = frame.copy()
     if "Nominal Kontrak" in display_frame:
@@ -424,11 +451,29 @@ if st.session_state.load_warning:
 
 with st.sidebar:
     st.header("Menu")
-    active_menu = st.radio("Pilih halaman", ["Dashboard", "Edit data customer", "Tambah customer baru", "Import data branding"], key="main_menu")
-    st.divider()
+    active_menu = st.radio(
+        "Pilih halaman",
+        ["Dashboard", "Edit data customer", "Tambah customer baru", "Import data branding", "Backup ke Google Sheet"],
+        key="main_menu",
+    )
+
+contracts = add_contract_status(st.session_state.contracts)
+if active_menu == "Dashboard":
+    expired = int(contracts["Status Kontrak"].eq("Expired").sum())
+    soon = int(contracts["Status Kontrak"].isin(["Kritis (≤ 30 hari)", "Warning (31–90 hari)"]).sum())
+    total_value = pd.to_numeric(contracts["Nominal Kontrak"], errors="coerce").sum()
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Jumlah customer", f"{len(contracts):,}".replace(",", "."))
+    m2.metric("Total nominal kontrak", f"Rp {total_value:,.0f}".replace(",", "."))
+    m3.metric("Akan berakhir ≤ 90 hari", soon)
+    m4.metric("Sudah berakhir", expired)
+    if expired:
+        st.error(f"Perhatian: {expired} kontrak sudah berakhir.")
+    if soon:
+        st.warning(f"Pengingat: {soon} kontrak akan berakhir dalam 90 hari.")
     st.subheader("Upload / Download Excel")
     upload = st.file_uploader("Upload workbook Excel (.xlsx)", type=["xlsx"], key="workbook_upload")
-    if st.button("Import dan ganti data", type="primary", use_container_width=True):
+    if st.button("Import dan ganti data", type="primary", key="import_contract_workbook"):
         if upload is None:
             st.warning("Pilih file Excel terlebih dahulu.")
         else:
@@ -445,24 +490,22 @@ with st.sidebar:
                     st.rerun()
             except Exception as error:
                 st.error(f"Gagal mengimpor Excel: {error}")
-    st.download_button("Download data Excel", data=excel_bytes(st.session_state.contracts), file_name="Monitoring_Kontrak_Outlet.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-    st.download_button("Download template Excel", data=excel_bytes(pd.DataFrame(columns=COLUMNS)), file_name="Template_Monitoring_Kontrak_Outlet.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-    st.caption("Penyimpanan lokal Streamlit Cloud dapat bersifat sementara. Unduh backup data secara berkala.")
-
-contracts = add_contract_status(st.session_state.contracts)
-if active_menu == "Dashboard":
-    expired = int(contracts["Status Kontrak"].eq("Expired").sum())
-    soon = int(contracts["Status Kontrak"].isin(["Kritis (≤ 30 hari)", "Warning (31–90 hari)"]).sum())
-    total_value = pd.to_numeric(contracts["Nominal Kontrak"], errors="coerce").sum()
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Jumlah customer", f"{len(contracts):,}".replace(",", "."))
-    m2.metric("Total nominal kontrak", f"Rp {total_value:,.0f}".replace(",", "."))
-    m3.metric("Akan berakhir ≤ 90 hari", soon)
-    m4.metric("Sudah berakhir", expired)
-    if expired:
-        st.error(f"Perhatian: {expired} kontrak sudah berakhir.")
-    if soon:
-        st.warning(f"Pengingat: {soon} kontrak akan berakhir dalam 90 hari.")
+    excel_col1, excel_col2 = st.columns(2)
+    excel_col1.download_button(
+        "Download data Excel",
+        data=excel_bytes(st.session_state.contracts),
+        file_name="Monitoring_Kontrak_Outlet.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+    excel_col2.download_button(
+        "Download template Excel",
+        data=excel_bytes(pd.DataFrame(columns=COLUMNS)),
+        file_name="Template_Monitoring_Kontrak_Outlet.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+    st.caption("Import akan mengganti seluruh data customer. Penyimpanan lokal Streamlit Cloud dapat bersifat sementara.")
     st.subheader("Filter data kontrak")
     f1, f2, f3, f4 = st.columns(4)
     zones = ["Semua"] + sorted(contracts["Zona"].dropna().astype(str).unique().tolist())
@@ -487,14 +530,14 @@ if active_menu == "Dashboard":
     sorted_view = view.sort_values("Sisa Hari", na_position="last")
     st.download_button("Download daftar customer ke Excel", data=excel_bytes(format_outlet_table(sorted_view)), file_name="Daftar_Customer_dan_Status_Kontrak.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     if view.empty:
-        st.info("Belum ada data yang cocok. Gunakan menu Upload Excel di sidebar untuk memasukkan data.")
+        st.info("Belum ada data yang cocok. Gunakan bagian Upload / Download Excel pada dashboard untuk memasukkan data.")
     else:
         st.dataframe(format_outlet_table(sorted_view), use_container_width=True, hide_index=True)
 
 elif active_menu == "Edit data customer":
     st.header("Edit data customer")
     if contracts.empty:
-        st.info("Data customer belum ada. Gunakan menu **Tambah customer baru** atau import workbook Excel dari sidebar.")
+        st.info("Data customer belum ada. Gunakan menu **Tambah customer baru** atau bagian Upload / Download Excel pada dashboard.")
     else:
         record_options = [f"{i} | {safe_text(row['ID Outlet']) or 'Tanpa ID'} | {safe_text(row['Nama Customer']) or 'Tanpa nama'}" for i, row in contracts.iterrows()]
         selected_record = st.selectbox("Pilih customer yang akan diedit", record_options, key="selected_customer_record")
@@ -544,7 +587,7 @@ elif active_menu == "Tambah customer baru":
                 st.rerun()
             except Exception as error:
                 st.error(f"Gagal menyimpan customer baru: {error}")
-else:
+elif active_menu == "Import data branding":
     st.header("Import data outlet branding")
     st.caption(
         "Data dengan ID Customer ganda dipilih berdasarkan Tanggal Pekerjaan Sampai terbaru. "
@@ -641,3 +684,33 @@ else:
                 "Tanggal Pekerjaan Sampai", "No. Dokumen",
             ]
             st.dataframe(without_ids[missing_columns], use_container_width=True, hide_index=True)
+else:
+    st.header("Backup ke Google Sheet")
+    st.caption(
+        "Backup mengirim seluruh data Daftar customer dan mengganti isi tab "
+        f"'{SHEET_NAME}' pada spreadsheet yang terhubung ke Apps Script."
+    )
+    try:
+        backup_url = str(st.secrets.get("GOOGLE_APPS_SCRIPT_URL", "") or "").strip()
+        backup_token = str(st.secrets.get("GOOGLE_APPS_SCRIPT_TOKEN", "") or "").strip()
+    except FileNotFoundError:
+        backup_url = ""
+        backup_token = ""
+    if not backup_url or not backup_token:
+        st.warning(
+            "Konfigurasi belum lengkap. Atur GOOGLE_APPS_SCRIPT_URL dan "
+            "GOOGLE_APPS_SCRIPT_TOKEN di Streamlit secrets."
+        )
+    else:
+        st.info(f"Data yang akan dibackup: {len(st.session_state.contracts)} outlet.")
+        st.warning("Backup akan mengganti isi tab tujuan dengan data outlet saat ini.")
+        if st.button("Backup data sekarang", type="primary"):
+            try:
+                row_count = backup_to_google_sheet(
+                    st.session_state.contracts,
+                    backup_url,
+                    backup_token,
+                )
+                st.success(f"Backup berhasil: {row_count} baris tersimpan di Google Sheet.")
+            except Exception as error:
+                st.error(f"Backup ke Google Sheet gagal: {error}")
