@@ -10,23 +10,32 @@ import streamlit as st
 APP_TITLE = "Monitoring Kontrak Outlet"
 DATA_FILE = Path("data") / "DRP & Outlet MCD - DSO Surabaya Barat.xlsx"
 SHEET_NAME = "Monitoring Kontrak Outlet"
+MATERIAL_COLUMNS = ["Panel Toko", "Showcase", "Layar Toko", "Shop Sign / Neon Box"]
 COLUMNS = [
-    "ID Outlet", "Nama Outlet", "Alamat", "Zona", "Sektor",
+    "ID Outlet", "Nama Customer", "Alamat", "Zona", "Sektor", "Pos Budget",
     "Kategori Outlet", "Kategori Pekerjaan", "Brand", "Nominal Kontrak",
-    "Periode Kontrak Awal", "Periode Kontrak Akhir",
+    "Periode Kontrak Awal", "Periode Kontrak Akhir", *MATERIAL_COLUMNS,
+    "Ukuran Panel Toko", "Ukuran Sticker Panel Toko",
 ]
 ALIASES = {
     "ID Outlet": ("ID Outlet", "ID Customer", "Customer ID", "Kode Outlet", "Outlet ID"),
-    "Nama Outlet": ("Nama Outlet", "Nama Toko", "Customer", "Outlet", "Customer Name"),
+    "Nama Customer": ("Nama Customer", "Customer Name", "Nama Outlet", "Nama Toko", "Customer", "Outlet"),
     "Alamat": ("Alamat", "Alamat Outlet", "Alamat Toko", "Address", "Outlet Address", "Customer Address"),
     "Zona": ("Zona", "Zone"),
     "Sektor": ("Sektor", "Sector", "Kecamatan"),
-    "Kategori Outlet": ("Kategori Outlet", "Customer Group Category", "Pos Budget", "Kategori"),
+    "Pos Budget": ("Pos Budget", "Budget Position"),
+    "Kategori Outlet": ("Kategori Outlet", "Customer Group Category", "Kategori"),
     "Kategori Pekerjaan": ("Kategori Pekerjaan", "Kategori Pekerjaan Outlet", "Work Category", "Job Category", "Kategori Kerja"),
     "Brand": ("Brand", "Finance Brand", "Merek"),
     "Nominal Kontrak": ("Nominal Kontrak", "Nominal", "Nominal.1", "Contract Amount", "Nilai Kontrak"),
     "Periode Kontrak Awal": ("Periode Kontrak Awal", "Periode Awal Kontrak", "Mulai", "Tanggal Mulai", "Start Date"),
     "Periode Kontrak Akhir": ("Periode Kontrak Akhir", "Periode Akhir Kontrak", "Akhir", "Tanggal Akhir", "End Date", "Expiry Date"),
+    "Panel Toko": ("Panel Toko", "Materi Panel Toko"),
+    "Showcase": ("Showcase", "Materi Showcase"),
+    "Layar Toko": ("Layar Toko", "Materi Layar Toko"),
+    "Shop Sign / Neon Box": ("Shop Sign / Neon Box", "Shop Sign", "Neon Box", "Materi Shop Sign / Neon Box"),
+    "Ukuran Panel Toko": ("Ukuran Panel Toko", "Size Panel Toko"),
+    "Ukuran Sticker Panel Toko": ("Ukuran Sticker Panel Toko", "Ukuran Stiker Panel Toko", "Size Sticker Panel Toko"),
 }
 
 st.set_page_config(page_title=APP_TITLE, page_icon="📊", layout="wide")
@@ -57,6 +66,16 @@ def parse_amount(value):
         return pd.NA
 
 
+def parse_tickmark(value) -> bool:
+    if pd.isna(value):
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().casefold() in {"✓", "✔", "☑", "x", "yes", "ya", "true", "1", "centang", "check"}
+
+
 def normalize_data(frame: pd.DataFrame) -> pd.DataFrame:
     frame = clean_headers(frame)
     normalized = pd.DataFrame(index=frame.index)
@@ -64,11 +83,13 @@ def normalize_data(frame: pd.DataFrame) -> pd.DataFrame:
     for target, names in ALIASES.items():
         source = next((lowered[name.casefold()] for name in names if name.casefold() in lowered), None)
         normalized[target] = frame[source] if source is not None else pd.NA
-    text_columns = ["ID Outlet", "Nama Outlet", "Alamat", "Zona", "Sektor", "Kategori Outlet", "Kategori Pekerjaan", "Brand"]
+    text_columns = [column for column in COLUMNS if column not in MATERIAL_COLUMNS and column not in ("Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir")]
     for column in text_columns:
         normalized[column] = normalized[column].astype("string").str.strip()
         normalized[column] = normalized[column].replace({"": pd.NA, "<NA>": pd.NA, "nan": pd.NA})
     normalized["Nominal Kontrak"] = normalized["Nominal Kontrak"].map(parse_amount)
+    for column in MATERIAL_COLUMNS:
+        normalized[column] = normalized[column].map(parse_tickmark).astype(bool)
     for column in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
         normalized[column] = pd.to_datetime(normalized[column], errors="coerce", dayfirst=True).dt.tz_localize(None)
     normalized = normalized[COLUMNS]
@@ -103,8 +124,8 @@ def validate_data(frame: pd.DataFrame) -> list[str]:
     normalized = normalize_data(frame)
     if normalized.empty:
         return errors
-    if (normalized["Nama Outlet"].isna() & normalized["ID Outlet"].isna()).any():
-        errors.append("Setiap baris harus berisi Nama Outlet atau ID Outlet.")
+    if (normalized["Nama Customer"].isna() & normalized["ID Outlet"].isna()).any():
+        errors.append("Setiap baris harus berisi Nama Customer atau ID Outlet.")
     if (pd.to_numeric(normalized["Nominal Kontrak"], errors="coerce") < 0).any():
         errors.append("Nominal kontrak tidak boleh negatif.")
     invalid_period = (normalized["Periode Kontrak Awal"].notna() & normalized["Periode Kontrak Akhir"].notna() & (normalized["Periode Kontrak Akhir"] < normalized["Periode Kontrak Awal"]))
@@ -135,8 +156,12 @@ def add_contract_status(frame: pd.DataFrame, today: date | None = None) -> pd.Da
 
 def excel_bytes(frame: pd.DataFrame) -> bytes:
     output = BytesIO()
+    export = frame.copy()
+    for column in MATERIAL_COLUMNS:
+        if column in export:
+            export[column] = export[column].map(lambda checked: "✓" if parse_tickmark(checked) else "")
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        frame.to_excel(writer, sheet_name=SHEET_NAME, index=False)
+        export.to_excel(writer, sheet_name=SHEET_NAME, index=False)
     return output.getvalue()
 
 
@@ -147,11 +172,10 @@ def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
     for column in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
         if column in display_frame:
             display_frame[column] = pd.to_datetime(display_frame[column], errors="coerce").map(lambda value: "" if pd.isna(value) else value.strftime("%d/%m/%Y"))
+    for column in MATERIAL_COLUMNS:
+        if column in display_frame:
+            display_frame[column] = display_frame[column].map(lambda checked: "✓" if parse_tickmark(checked) else "")
     return display_frame
-
-
-def outlet_list_excel_bytes(frame: pd.DataFrame) -> bytes:
-    return excel_bytes(format_outlet_table(frame))
 
 
 def save_data(frame: pd.DataFrame) -> None:
@@ -171,63 +195,55 @@ def safe_date(value):
     return None if pd.isna(value) else pd.Timestamp(value).date()
 
 
-def master_options(frame: pd.DataFrame, column: str) -> list[str]:
-    if frame.empty or column not in frame:
-        return []
-    values = frame[column].dropna().astype(str).str.strip()
-    return sorted(values.loc[values != ""].unique().tolist())
-
-
-def render_outlet_form(current: pd.Series, row_index: int | None, master_frame: pd.DataFrame) -> tuple[bool, dict]:
+def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool, dict]:
     suffix = "new" if row_index is None else f"row_{row_index}"
-    is_new = row_index is None
     with st.form(f"outlet_form_{suffix}"):
-        st.subheader("Data outlet")
+        st.subheader("Data customer dan kontrak")
         left, right = st.columns(2)
         with left:
             outlet_id = st.text_input("ID Outlet", value=safe_text(current["ID Outlet"]), key=f"id_{suffix}")
-            outlet_name = st.text_input("Nama Outlet", value=safe_text(current["Nama Outlet"]), key=f"name_{suffix}")
+            customer_name = st.text_input("Nama Customer", value=safe_text(current["Nama Customer"]), key=f"name_{suffix}")
             address = st.text_area("Alamat", value=safe_text(current["Alamat"]), key=f"address_{suffix}")
-            zones, sectors = master_options(master_frame, "Zona"), master_options(master_frame, "Sektor")
-            outlet_categories = master_options(master_frame, "Kategori Outlet")
-            if is_new:
-                zone = st.selectbox("Zona", zones, index=None, placeholder="Pilih zona", key=f"zone_{suffix}") or pd.NA
-                sector = st.selectbox("Sektor", sectors, index=None, placeholder="Pilih sektor", key=f"sector_{suffix}") or pd.NA
-                outlet_category = st.selectbox("Kategori Outlet", outlet_categories, index=None, placeholder="Pilih kategori outlet", key=f"outlet_category_{suffix}") or pd.NA
-            else:
-                zone = st.text_input("Zona", value=safe_text(current["Zona"]), key=f"zone_{suffix}")
-                sector = st.text_input("Sektor", value=safe_text(current["Sektor"]), key=f"sector_{suffix}")
-                outlet_category = st.text_input("Kategori Outlet", value=safe_text(current["Kategori Outlet"]), key=f"outlet_category_{suffix}")
+            zone = st.text_input("Zona", value=safe_text(current["Zona"]), key=f"zone_{suffix}")
+            sector = st.text_input("Sektor", value=safe_text(current["Sektor"]), key=f"sector_{suffix}")
+            budget_pos = st.text_input("Pos Budget", value=safe_text(current["Pos Budget"]), key=f"budget_{suffix}")
+            outlet_category = st.text_input("Kategori Outlet", value=safe_text(current["Kategori Outlet"]), key=f"outlet_category_{suffix}")
+            job_category = st.text_input("Kategori Pekerjaan", value=safe_text(current["Kategori Pekerjaan"]), key=f"job_category_{suffix}")
         with right:
-            job_categories, brands = master_options(master_frame, "Kategori Pekerjaan"), master_options(master_frame, "Brand")
-            if is_new:
-                job_category = st.selectbox("Kategori Pekerjaan", job_categories, index=None, placeholder="Pilih kategori pekerjaan", key=f"job_category_{suffix}") or pd.NA
-                brand = st.selectbox("Brand", brands, index=None, placeholder="Pilih brand", key=f"brand_{suffix}") or pd.NA
-            else:
-                job_category = st.text_input("Kategori Pekerjaan", value=safe_text(current["Kategori Pekerjaan"]), key=f"job_category_{suffix}")
-                brand = st.text_input("Brand", value=safe_text(current["Brand"]), key=f"brand_{suffix}")
+            brand = st.text_input("Brand", value=safe_text(current["Brand"]), key=f"brand_{suffix}")
             parsed_amount = parse_amount(current["Nominal Kontrak"])
             amount = st.number_input("Nominal Kontrak (Rp)", min_value=0.0, step=100000.0, value=0.0 if pd.isna(parsed_amount) else float(parsed_amount), key=f"amount_{suffix}")
             contract_start = st.date_input("Periode Kontrak Awal", value=safe_date(current["Periode Kontrak Awal"]), key=f"start_{suffix}")
             contract_end = st.date_input("Periode Kontrak Akhir", value=safe_date(current["Periode Kontrak Akhir"]), key=f"end_{suffix}")
-        submitted = st.form_submit_button("Simpan data outlet", type="primary")
+        st.markdown("**Materi kontrak**")
+        material_cols = st.columns(4)
+        material_values = {column: material_cols[index].checkbox(column, value=parse_tickmark(current[column]), key=f"material_{index}_{suffix}") for index, column in enumerate(MATERIAL_COLUMNS)}
+        size_col1, size_col2 = st.columns(2)
+        panel_size = size_col1.text_input("Ukuran Panel Toko", value=safe_text(current["Ukuran Panel Toko"]), key=f"panel_size_{suffix}")
+        sticker_size = size_col2.text_input("Ukuran Sticker Panel Toko", value=safe_text(current["Ukuran Sticker Panel Toko"]), key=f"sticker_size_{suffix}")
+        submitted = st.form_submit_button("Simpan data customer", type="primary")
     values = {
-        "ID Outlet": outlet_id.strip() or pd.NA, "Nama Outlet": outlet_name.strip() or pd.NA,
+        "ID Outlet": outlet_id.strip() or pd.NA,
+        "Nama Customer": customer_name.strip() or pd.NA,
         "Alamat": address.strip() or pd.NA,
-        "Zona": zone if is_new else zone.strip() or pd.NA,
-        "Sektor": sector if is_new else sector.strip() or pd.NA,
-        "Kategori Outlet": outlet_category if is_new else outlet_category.strip() or pd.NA,
-        "Kategori Pekerjaan": job_category if is_new else job_category.strip() or pd.NA,
-        "Brand": brand if is_new else brand.strip() or pd.NA,
+        "Zona": zone.strip() or pd.NA,
+        "Sektor": sector.strip() or pd.NA,
+        "Pos Budget": budget_pos.strip() or pd.NA,
+        "Kategori Outlet": outlet_category.strip() or pd.NA,
+        "Kategori Pekerjaan": job_category.strip() or pd.NA,
+        "Brand": brand.strip() or pd.NA,
         "Nominal Kontrak": amount,
         "Periode Kontrak Awal": pd.Timestamp(contract_start) if contract_start else pd.NaT,
         "Periode Kontrak Akhir": pd.Timestamp(contract_end) if contract_end else pd.NaT,
+        **material_values,
+        "Ukuran Panel Toko": panel_size.strip() or pd.NA,
+        "Ukuran Sticker Panel Toko": sticker_size.strip() or pd.NA,
     }
     return submitted, values
 
 
 st.title("📊 Monitoring Kontrak Outlet")
-st.caption("Pantau data outlet dan kontrak, lihat peringatan masa berlaku, serta kelola data melalui form dan Excel.")
+st.caption("Pantau data customer dan kontrak, lihat peringatan masa berlaku, serta kelola data melalui form dan Excel.")
 if "contracts" not in st.session_state:
     initial, warning = load_initial_data()
     st.session_state.contracts = initial
@@ -237,7 +253,7 @@ if st.session_state.load_warning:
 
 with st.sidebar:
     st.header("Menu")
-    active_menu = st.radio("Pilih halaman", ["Dashboard", "Edit data outlet", "Tambah outlet baru"], key="main_menu")
+    active_menu = st.radio("Pilih halaman", ["Dashboard", "Edit data customer", "Tambah customer baru"], key="main_menu")
     st.divider()
     st.subheader("Upload / Download Excel")
     upload = st.file_uploader("Upload workbook Excel (.xlsx)", type=["xlsx"], key="workbook_upload")
@@ -268,7 +284,7 @@ if active_menu == "Dashboard":
     soon = int(contracts["Status Kontrak"].isin(["Kritis (≤ 30 hari)", "Warning (31–90 hari)"]).sum())
     total_value = pd.to_numeric(contracts["Nominal Kontrak"], errors="coerce").sum()
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Jumlah outlet", f"{len(contracts):,}".replace(",", "."))
+    m1.metric("Jumlah customer", f"{len(contracts):,}".replace(",", "."))
     m2.metric("Total nominal kontrak", f"Rp {total_value:,.0f}".replace(",", "."))
     m3.metric("Akan berakhir ≤ 90 hari", soon)
     m4.metric("Sudah berakhir", expired)
@@ -278,9 +294,9 @@ if active_menu == "Dashboard":
         st.warning(f"Pengingat: {soon} kontrak akan berakhir dalam 90 hari.")
     st.subheader("Filter data kontrak")
     f1, f2, f3, f4 = st.columns(4)
-    zones = ["Semua"] + master_options(contracts, "Zona")
-    sectors = ["Semua"] + master_options(contracts, "Sektor")
-    job_categories = ["Semua"] + master_options(contracts, "Kategori Pekerjaan")
+    zones = ["Semua"] + sorted(contracts["Zona"].dropna().astype(str).unique().tolist())
+    sectors = ["Semua"] + sorted(contracts["Sektor"].dropna().astype(str).unique().tolist())
+    job_categories = ["Semua"] + sorted(contracts["Kategori Pekerjaan"].dropna().astype(str).unique().tolist())
     statuses = ["Semua", "Expired", "Kritis (≤ 30 hari)", "Warning (31–90 hari)", "Aktif (> 90 hari)", "Data belum lengkap"]
     selected_zone = f1.selectbox("Zona", zones)
     selected_sector = f2.selectbox("Sektor", sectors)
@@ -295,25 +311,24 @@ if active_menu == "Dashboard":
         view = view[view["Kategori Pekerjaan"] == selected_job_category]
     if selected_status != "Semua":
         view = view[view["Status Kontrak"] == selected_status]
-    st.subheader("Daftar outlet dan status kontrak")
-    st.metric("Jumlah outlet sesuai filter", f"{len(view):,}".replace(",", "."))
+    st.subheader("Daftar customer dan status kontrak")
+    st.metric("Jumlah customer sesuai filter", f"{len(view):,}".replace(",", "."))
     sorted_view = view.sort_values("Sisa Hari", na_position="last")
-    st.download_button("Download daftar outlet ke Excel", data=outlet_list_excel_bytes(sorted_view), file_name="Daftar_Outlet_dan_Status_Kontrak.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="download_filtered_outlet_list")
+    st.download_button("Download daftar customer ke Excel", data=excel_bytes(format_outlet_table(sorted_view)), file_name="Daftar_Customer_dan_Status_Kontrak.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     if view.empty:
         st.info("Belum ada data yang cocok. Gunakan menu Upload Excel di sidebar untuk memasukkan data.")
     else:
         st.dataframe(format_outlet_table(sorted_view), use_container_width=True, hide_index=True)
 
-elif active_menu == "Edit data outlet":
-    st.header("Edit data outlet")
+elif active_menu == "Edit data customer":
+    st.header("Edit data customer")
     if contracts.empty:
-        st.info("Data master outlet belum ada. Gunakan menu **Tambah outlet baru** atau import workbook Excel dari sidebar.")
+        st.info("Data customer belum ada. Gunakan menu **Tambah customer baru** atau import workbook Excel dari sidebar.")
     else:
-        record_options = [f"{i} | {safe_text(row['ID Outlet']) or 'Tanpa ID'} | {safe_text(row['Nama Outlet']) or 'Tanpa nama'}" for i, row in contracts.iterrows()]
-        selected_record = st.selectbox("Pilih outlet yang akan diedit", record_options, key="selected_outlet_record")
+        record_options = [f"{i} | {safe_text(row['ID Outlet']) or 'Tanpa ID'} | {safe_text(row['Nama Customer']) or 'Tanpa nama'}" for i, row in contracts.iterrows()]
+        selected_record = st.selectbox("Pilih customer yang akan diedit", record_options, key="selected_customer_record")
         selected_index = int(selected_record.split(" | ", 1)[0])
-        current = contracts.loc[selected_index]
-        submitted, updated_record = render_outlet_form(current, selected_index, st.session_state.contracts)
+        submitted, updated_record = render_outlet_form(contracts.loc[selected_index], selected_index)
         if submitted:
             updated_data = contracts[COLUMNS].copy()
             for column, value in updated_record.items():
@@ -325,46 +340,26 @@ elif active_menu == "Edit data outlet":
                 try:
                     save_data(updated_data)
                     st.session_state.contracts = normalize_data(updated_data)
-                    st.success("Data outlet berhasil diperbarui.")
+                    st.success("Data customer berhasil diperbarui.")
                     st.rerun()
                 except Exception as error:
                     st.error(f"Gagal menyimpan data: {error}")
-
         st.divider()
-        st.subheader("Hapus outlet")
-        pending_delete = st.session_state.get("pending_delete_outlet")
-        if pending_delete is None:
-            if st.button("Hapus outlet yang dipilih", type="secondary", key="request_delete_outlet"):
-                st.session_state.pending_delete_outlet = selected_index
+        st.subheader("Hapus customer")
+        if st.button("Hapus customer yang dipilih", type="secondary", key="delete_customer"):
+            try:
+                updated_data = st.session_state.contracts.drop(index=selected_index).reset_index(drop=True)
+                save_data(updated_data)
+                st.session_state.contracts = normalize_data(updated_data)
+                st.success("Customer berhasil dihapus.")
                 st.rerun()
-        elif pending_delete < len(st.session_state.contracts):
-            target = st.session_state.contracts.iloc[pending_delete]
-            target_name = safe_text(target["Nama Outlet"]) or "Tanpa nama"
-            target_id = safe_text(target["ID Outlet"]) or "Tanpa ID"
-            st.warning(f"Yakin ingin menghapus outlet {target_name} (ID: {target_id})? Tindakan ini tidak dapat dibatalkan.")
-            confirm_col, cancel_col = st.columns(2)
-            if confirm_col.button("Ya, hapus outlet", type="primary", key="confirm_delete_outlet"):
-                try:
-                    updated_data = st.session_state.contracts.drop(index=pending_delete).reset_index(drop=True)
-                    save_data(updated_data)
-                    st.session_state.contracts = normalize_data(updated_data)
-                    del st.session_state.pending_delete_outlet
-                    st.success("Outlet berhasil dihapus.")
-                    st.rerun()
-                except Exception as error:
-                    st.error(f"Gagal menghapus outlet: {error}")
-            if cancel_col.button("Batal", key="cancel_delete_outlet"):
-                del st.session_state.pending_delete_outlet
-                st.rerun()
-        else:
-            del st.session_state.pending_delete_outlet
-            st.rerun()
+            except Exception as error:
+                st.error(f"Gagal menghapus customer: {error}")
 
-elif active_menu == "Tambah outlet baru":
-    st.header("Tambah outlet baru")
-    st.caption("Data Zona, Sektor, Kategori Outlet, Kategori Pekerjaan, dan Brand diambil sebagai pilihan master dari workbook Excel.")
+else:
+    st.header("Tambah customer baru")
     blank_record = pd.Series({column: pd.NA for column in COLUMNS})
-    submitted, new_record = render_outlet_form(blank_record, None, st.session_state.contracts)
+    submitted, new_record = render_outlet_form(blank_record, None)
     if submitted:
         updated_data = pd.concat([contracts[COLUMNS], pd.DataFrame([new_record])], ignore_index=True)
         problems = validate_data(updated_data)
@@ -374,7 +369,7 @@ elif active_menu == "Tambah outlet baru":
             try:
                 save_data(updated_data)
                 st.session_state.contracts = normalize_data(updated_data)
-                st.success("Outlet baru berhasil ditambahkan.")
+                st.success("Customer baru berhasil ditambahkan.")
                 st.rerun()
             except Exception as error:
-                st.error(f"Gagal menyimpan outlet baru: {error}")
+                st.error(f"Gagal menyimpan customer baru: {error}")
