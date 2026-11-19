@@ -551,14 +551,43 @@ if active_menu == "Dashboard":
         view = view[view["Status Kontrak"] == selected_status]
     st.subheader("Hasil filter data kontrak")
     st.metric("Jumlah customer sesuai filter", f"{len(view):,}".replace(",", "."))
-    st.download_button("Download daftar customer ke Excel", data=excel_bytes(format_outlet_table(view.sort_values("Sisa Hari", na_position="last"))), file_name="Daftar_Customer_dan_Status_Kontrak.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    groups = view["Pos Budget"].map(budget_group)
+    regular_view = view.loc[groups.eq("")]
+    venue_view = view.loc[groups.eq("Venue")]
+    other_permanent_view = view.loc[groups.eq("Others Permanen")]
+    download_columns = st.columns(3)
+    download_specs = [
+        (
+            "Download Daftar customer dan status kontrak Excel",
+            regular_view,
+            "Daftar_Customer_dan_Status_Kontrak.xlsx",
+            "download_regular_contracts",
+        ),
+        (
+            "Download Daftar customer - Venue Excel",
+            venue_view,
+            "Daftar_Customer_Venue.xlsx",
+            "download_venue_contracts",
+        ),
+        (
+            "Download Daftar customer - Others Permanen Excel",
+            other_permanent_view,
+            "Daftar_Customer_Others_Permanen.xlsx",
+            "download_other_permanent_contracts",
+        ),
+    ]
+    for column, (label, data, filename, key) in zip(download_columns, download_specs):
+        column.download_button(
+            label,
+            data=excel_bytes(data.sort_values("Sisa Hari", na_position="last")),
+            file_name=filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=key,
+            use_container_width=True,
+        )
     if view.empty:
         st.info("Belum ada data yang cocok. Gunakan bagian Upload / Download Excel pada dashboard untuk memasukkan data.")
     else:
-        groups = view["Pos Budget"].map(budget_group)
-        regular_view = view.loc[groups.eq("")]
-        venue_view = view.loc[groups.eq("Venue")]
-        other_permanent_view = view.loc[groups.eq("Others Permanen")]
         selected_group = budget_group(selected_budget)
         if selected_budget == "Semua":
             render_dashboard_table("Daftar customer dan status kontrak", regular_view)
