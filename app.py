@@ -590,7 +590,7 @@ if active_menu == "Dashboard":
     else:
         selected_group = budget_group(selected_budget)
         if selected_budget == "Semua":
-            render_dashboard_table("Daftar customer - Retail Supply", reguler_view)
+            render_dashboard_table("Daftar customer - Retail Supply", reguller_view)
             render_dashboard_table("Daftar customer - Venue", venue_view)
             render_dashboard_table("Daftar customer - Others Permanen", other_permanent_view)
         elif selected_group == "Venue":
