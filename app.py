@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date
 from io import BytesIO
 from pathlib import Path
@@ -19,7 +20,7 @@ COLUMNS = [
 ]
 ALIASES = {
     "ID Outlet": ("ID Outlet", "ID Customer", "Customer ID", "Kode Outlet", "Outlet ID"),
-    "Nama Customer": ("Nama Customer", "Customer Name", "Nama Outlet", "Nama Toko", "Customer", "Outlet"),
+    "Nama Customer": ("Nama Customer", "Customer Name", "Customer", "Nama Outlet", "Nama Toko", "Outlet"),
     "Alamat": ("Alamat", "Alamat Outlet", "Alamat Toko", "Address", "Outlet Address", "Customer Address"),
     "Zona": ("Zona", "Zone"),
     "Sektor": ("Sektor", "Sector", "Kecamatan"),
@@ -31,11 +32,16 @@ ALIASES = {
     "Periode Kontrak Awal": ("Periode Kontrak Awal", "Periode Awal Kontrak", "Mulai", "Tanggal Mulai", "Start Date"),
     "Periode Kontrak Akhir": ("Periode Kontrak Akhir", "Periode Akhir Kontrak", "Akhir", "Tanggal Akhir", "End Date", "Expiry Date"),
     "Panel Toko": ("Panel Toko", "Materi Panel Toko"),
-    "Showcase": ("Showcase", "Materi Showcase"),
-    "Layar Toko": ("Layar Toko", "Materi Layar Toko"),
+    "Showcase": ("Showcase", "Show Case", "Materi Showcase"),
+    "Layar Toko": ("Layar Toko", "Layar", "Materi Layar Toko"),
     "Shop Sign / Neon Box": ("Shop Sign / Neon Box", "Shop Sign", "Neon Box", "Materi Shop Sign / Neon Box"),
-    "Ukuran Panel Toko": ("Ukuran Panel Toko", "Size Panel Toko"),
-    "Ukuran Sticker Panel Toko": ("Ukuran Sticker Panel Toko", "Ukuran Stiker Panel Toko", "Size Sticker Panel Toko"),
+    "Ukuran Panel Toko": ("Ukuran Panel Toko", "Size Panel Toko", "Panel"),
+    "Ukuran Sticker Panel Toko": (
+        "Ukuran Sticker Panel Toko",
+        "Ukuran Sticker Panel (diluar Nama Toko)",
+        "Ukuran Stiker Panel Toko",
+        "Size Sticker Panel Toko",
+    ),
 }
 
 st.set_page_config(page_title=APP_TITLE, page_icon="📊", layout="wide")
@@ -76,20 +82,74 @@ def parse_tickmark(value) -> bool:
     return str(value).strip().casefold() in {"✓", "✔", "☑", "x", "yes", "ya", "true", "1", "centang", "check"}
 
 
+def parse_material(value, column: str) -> bool:
+    if parse_tickmark(value):
+        return True
+    if pd.isna(value):
+        return False
+    text = str(value).strip().casefold()
+    patterns = {
+        "Panel Toko": r"\bpanel\s+toko\b",
+        "Showcase": r"\b(?:display|show\s*case|showcase)\b",
+        "Layar Toko": r"\blayar\b",
+        "Shop Sign / Neon Box": r"\b(?:shop\s*sign|neon\s*box)\b",
+    }
+    return bool(re.search(patterns[column], text))
+
+
+def extract_sizes(value):
+    if pd.isna(value) or str(value).strip() == "":
+        return pd.NA
+    text = str(value).strip()
+    matches = re.findall(
+        r"(?<!\d)(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*m\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not matches:
+        return text
+    sizes = dict.fromkeys(f"{width} x {height} m" for width, height in matches)
+    return ", ".join(sizes)
+
+
 def normalize_data(frame: pd.DataFrame) -> pd.DataFrame:
     frame = clean_headers(frame)
     normalized = pd.DataFrame(index=frame.index)
     lowered = {str(column).strip().casefold(): column for column in frame.columns}
     for target, names in ALIASES.items():
-        source = next((lowered[name.casefold()] for name in names if name.casefold() in lowered), None)
-        normalized[target] = frame[source] if source is not None else pd.NA
+        sources = [lowered[name.casefold()] for name in names if name.casefold() in lowered]
+        if target == "Nama Customer" and sources:
+            candidates = frame[sources].replace(r"^\s*$", pd.NA, regex=True)
+            normalized[target] = candidates.bfill(axis=1).iloc[:, 0]
+        else:
+            normalized[target] = frame[sources[0]] if sources else pd.NA
     text_columns = [column for column in COLUMNS if column not in MATERIAL_COLUMNS and column not in ("Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir")]
     for column in text_columns:
         normalized[column] = normalized[column].astype("string").str.strip()
         normalized[column] = normalized[column].replace({"": pd.NA, "<NA>": pd.NA, "nan": pd.NA})
+    for column in ("Ukuran Panel Toko", "Ukuran Sticker Panel Toko"):
+        normalized[column] = normalized[column].map(extract_sizes)
     normalized["Nominal Kontrak"] = normalized["Nominal Kontrak"].map(parse_amount)
+    contract_material_source = lowered.get("materi kontrak")
+    contract_material = frame[contract_material_source] if contract_material_source else pd.Series(pd.NA, index=frame.index)
+    has_contract_material = contract_material.notna() & contract_material.astype("string").str.strip().ne("")
     for column in MATERIAL_COLUMNS:
-        normalized[column] = normalized[column].map(parse_tickmark).astype(bool)
+        source_values = normalized[column].map(lambda value: parse_material(value, column))
+        if column != "Shop Sign / Neon Box":
+            patterns = {
+                "Panel Toko": r"\bpanel\s+toko\b",
+                "Showcase": r"\b(?:display|show\s*case|showcase)\b",
+                "Layar Toko": r"\blayar\b",
+            }
+            from_contract = contract_material.astype("string").str.contains(
+                patterns[column], case=False, regex=True, na=False
+            )
+            source_values = source_values.where(~has_contract_material, from_contract)
+        elif not any(name.casefold() in lowered for name in ALIASES[column]):
+            source_values = contract_material.astype("string").str.contains(
+                r"\b(?:shop\s*sign|neon\s*box)\b", case=False, regex=True, na=False
+            )
+        normalized[column] = source_values.astype(bool)
     for column in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
         normalized[column] = pd.to_datetime(normalized[column], errors="coerce", dayfirst=True).dt.tz_localize(None)
     normalized = normalized[COLUMNS]
