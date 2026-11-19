@@ -375,6 +375,27 @@ def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
     return display_frame
 
 
+def budget_group(value) -> str:
+    if pd.isna(value):
+        return ""
+    text = re.sub(r"\s+", " ", str(value).strip().casefold())
+    if re.match(r"others?\s+permanen\b", text):
+        return "Others Permanen"
+    if text == "venue":
+        return "Venue"
+    return ""
+
+
+def render_dashboard_table(title: str, frame: pd.DataFrame) -> None:
+    st.subheader(title)
+    if frame.empty:
+        st.info(f"Tidak ada customer di tabel {title.lower()} yang sesuai dengan filter.")
+        return
+    st.metric("Jumlah customer pada tabel", f"{len(frame):,}".replace(",", "."))
+    sorted_frame = frame.sort_values("Sisa Hari", na_position="last")
+    st.dataframe(format_outlet_table(sorted_frame), use_container_width=True, hide_index=True)
+
+
 def save_data(frame: pd.DataFrame) -> None:
     errors = validate_data(frame)
     if errors:
@@ -506,32 +527,49 @@ if active_menu == "Dashboard":
     )
     st.caption("Import akan mengganti seluruh data customer. Penyimpanan lokal Streamlit Cloud dapat bersifat sementara.")
     st.subheader("Filter data kontrak")
-    f1, f2, f3, f4 = st.columns(4)
+    f1, f2, f3, f4, f5 = st.columns(5)
     zones = ["Semua"] + sorted(contracts["Zona"].dropna().astype(str).unique().tolist())
     sectors = ["Semua"] + sorted(contracts["Sektor"].dropna().astype(str).unique().tolist())
+    budget_positions = ["Semua"] + sorted(contracts["Pos Budget"].dropna().astype(str).unique().tolist())
     job_categories = ["Semua"] + sorted(contracts["Kategori Pekerjaan"].dropna().astype(str).unique().tolist())
     statuses = ["Semua", "Expired", "Kritis (≤ 30 hari)", "Warning (31–90 hari)", "Aktif (> 90 hari)", "Data belum lengkap"]
     selected_zone = f1.selectbox("Zona", zones)
     selected_sector = f2.selectbox("Sektor", sectors)
-    selected_job_category = f3.selectbox("Kategori Pekerjaan", job_categories)
-    selected_status = f4.selectbox("Status kontrak", statuses)
+    selected_budget = f3.selectbox("Pos Budget", budget_positions)
+    selected_job_category = f4.selectbox("Kategori Pekerjaan", job_categories)
+    selected_status = f5.selectbox("Status kontrak", statuses)
     view = contracts.copy()
     if selected_zone != "Semua":
         view = view[view["Zona"] == selected_zone]
     if selected_sector != "Semua":
         view = view[view["Sektor"] == selected_sector]
+    if selected_budget != "Semua":
+        view = view[view["Pos Budget"] == selected_budget]
     if selected_job_category != "Semua":
         view = view[view["Kategori Pekerjaan"] == selected_job_category]
     if selected_status != "Semua":
         view = view[view["Status Kontrak"] == selected_status]
-    st.subheader("Daftar customer dan status kontrak")
+    st.subheader("Hasil filter data kontrak")
     st.metric("Jumlah customer sesuai filter", f"{len(view):,}".replace(",", "."))
-    sorted_view = view.sort_values("Sisa Hari", na_position="last")
-    st.download_button("Download daftar customer ke Excel", data=excel_bytes(format_outlet_table(sorted_view)), file_name="Daftar_Customer_dan_Status_Kontrak.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.download_button("Download daftar customer ke Excel", data=excel_bytes(format_outlet_table(view.sort_values("Sisa Hari", na_position="last"))), file_name="Daftar_Customer_dan_Status_Kontrak.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     if view.empty:
         st.info("Belum ada data yang cocok. Gunakan bagian Upload / Download Excel pada dashboard untuk memasukkan data.")
     else:
-        st.dataframe(format_outlet_table(sorted_view), use_container_width=True, hide_index=True)
+        groups = view["Pos Budget"].map(budget_group)
+        regular_view = view.loc[groups.eq("")]
+        venue_view = view.loc[groups.eq("Venue")]
+        other_permanent_view = view.loc[groups.eq("Others Permanen")]
+        selected_group = budget_group(selected_budget)
+        if selected_budget == "Semua":
+            render_dashboard_table("Daftar customer dan status kontrak", regular_view)
+            render_dashboard_table("Daftar customer - Venue", venue_view)
+            render_dashboard_table("Daftar customer - Others Permanen", other_permanent_view)
+        elif selected_group == "Venue":
+            render_dashboard_table("Daftar customer - Venue", venue_view)
+        elif selected_group == "Others Permanen":
+            render_dashboard_table("Daftar customer - Others Permanen", other_permanent_view)
+        else:
+            render_dashboard_table("Daftar customer dan status kontrak", regular_view)
 
 elif active_menu == "Edit data customer":
     st.header("Edit data customer")
