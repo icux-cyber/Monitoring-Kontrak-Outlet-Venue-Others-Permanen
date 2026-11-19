@@ -339,7 +339,7 @@ def excel_bytes(frame: pd.DataFrame) -> bytes:
 
 
 def backup_to_google_sheet(frame: pd.DataFrame, url: str) -> int:
-    if not url.startswith("https://script.google.com/"):
+    if not url.startswith("https://script.google.com/macros/s/AKfycbzXaUkLDCO7NJlUyuAVpx7qWD4icEk5kw-9IDcXwfJALUjUAmsvNcNt6N14hQVS93Y/exec"):
         raise ValueError("URL backup harus menggunakan alamat HTTPS Google Apps Script.")
     normalized = normalize_data(frame)
     records = json.loads(normalized.to_json(orient="records", date_format="iso", force_ascii=False))
