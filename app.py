@@ -434,9 +434,30 @@ def add_contract_status(frame: pd.DataFrame, today: date | None = None) -> pd.Da
     return result
 
 
+def format_nominal_id(value) -> str:
+    parsed = parse_amount(value)
+    if pd.isna(parsed):
+        return ""
+    return f"{float(parsed):,.0f}".replace(",", ".")
+
+
+def format_date_ddmmyyyy(value) -> str:
+    if pd.isna(value) or str(value).strip() == "":
+        return ""
+    dt = pd.to_datetime(value, errors="coerce", dayfirst=True)
+    if pd.isna(dt):
+        return ""
+    return dt.strftime("%d/%m/%Y")
+
+
 def excel_bytes(frame: pd.DataFrame) -> bytes:
     output = BytesIO()
     export = frame.copy()
+    if "Nominal Kontrak" in export:
+        export["Nominal Kontrak"] = export["Nominal Kontrak"].map(format_nominal_id)
+    for column in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
+        if column in export:
+            export[column] = export[column].map(format_date_ddmmyyyy)
     for column in MATERIAL_COLUMNS:
         if column in export:
             export[column] = export[column].map(lambda checked: "✓" if parse_tickmark(checked) else "")
@@ -472,14 +493,10 @@ def backup_to_google_sheet(frame: pd.DataFrame, url: str) -> int:
 def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
     display_frame = frame.copy()
     if "Nominal Kontrak" in display_frame:
-        display_frame["Nominal Kontrak"] = display_frame["Nominal Kontrak"].map(
-            lambda value: "" if pd.isna(value) else f"{float(value):,.0f}".replace(",", ".")
-        )
+        display_frame["Nominal Kontrak"] = display_frame["Nominal Kontrak"].map(format_nominal_id)
     for column in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
         if column in display_frame:
-            display_frame[column] = pd.to_datetime(display_frame[column], errors="coerce").map(
-                lambda value: "" if pd.isna(value) else value.strftime("%d/%m/%Y")
-            )
+            display_frame[column] = display_frame[column].map(format_date_ddmmyyyy)
     for column in MATERIAL_COLUMNS:
         if column in display_frame:
             display_frame[column] = display_frame[column].map(lambda checked: "✓" if parse_tickmark(checked) else "")
@@ -548,8 +565,18 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool,
                 value=0.0 if pd.isna(parsed_amount) else float(parsed_amount),
                 key=f"amount_{suffix}",
             )
-            contract_start = st.date_input("Periode Kontrak Awal", value=safe_date(current["Periode Kontrak Awal"]), key=f"start_{suffix}")
-            contract_end = st.date_input("Periode Kontrak Akhir", value=safe_date(current["Periode Kontrak Akhir"]), key=f"end_{suffix}")
+            contract_start = st.date_input(
+                "Periode Kontrak Awal",
+                value=safe_date(current["Periode Kontrak Awal"]),
+                format="DD/MM/YYYY",
+                key=f"start_{suffix}",
+            )
+            contract_end = st.date_input(
+                "Periode Kontrak Akhir",
+                value=safe_date(current["Periode Kontrak Akhir"]),
+                format="DD/MM/YYYY",
+                key=f"end_{suffix}",
+            )
         st.markdown("**Materi kontrak**")
         material_cols = st.columns(4)
         material_values = {
@@ -857,8 +884,8 @@ elif active_menu == "Tambah customer baru":
                 "Kategori Pekerjaan": "DRP",
                 "Brand": "DJARUM SUPER",
                 "Nominal Kontrak": 1500000,
-                "Periode Kontrak Awal": pd.Timestamp("2026-01-01"),
-                "Periode Kontrak Akhir": pd.Timestamp("2026-12-31"),
+                "Periode Kontrak Awal": "01/01/2026",
+                "Periode Kontrak Akhir": "31/12/2026",
                 "Panel Toko": True,
                 "Showcase": False,
                 "Layar Toko": False,
