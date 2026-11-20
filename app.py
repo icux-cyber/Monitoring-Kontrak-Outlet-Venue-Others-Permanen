@@ -18,7 +18,8 @@ COLUMNS = [
     "ID Outlet", "Nama Customer", "Alamat", "Zona", "Sektor", "Pos Budget",
     "Kategori Outlet", "Kategori Pekerjaan", "Brand", "Nominal Kontrak",
     "Periode Kontrak Awal", "Periode Kontrak Akhir", *MATERIAL_COLUMNS,
-    "Ukuran Panel Toko", "Ukuran Sticker Panel Toko",
+    "Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Brand Panel",
+    "Ukuran Layar", "Brand Layar",
 ]
 ALIASES = {
     "ID Outlet": ("ID Outlet", "ID Customer", "Customer ID", "Kode Outlet", "Outlet ID"),
@@ -44,6 +45,9 @@ ALIASES = {
         "Ukuran Stiker Panel Toko",
         "Size Sticker Panel Toko",
     ),
+    "Brand Panel": ("Brand Panel", "Brand Planning - Sticker Panel", "Merek Panel"),
+    "Ukuran Layar": ("Ukuran Layar", "Layar", "Materi Layar Toko", "Size Layar"),
+    "Brand Layar": ("Brand Layar", "Brand Planning - Layar DRP", "Merek Layar"),
 }
 
 st.set_page_config(page_title=APP_TITLE, page_icon="📊", layout="wide")
@@ -109,7 +113,7 @@ def extract_sizes(value):
         flags=re.IGNORECASE,
     )
     if not matches:
-        return text
+        return pd.NA
     sizes = dict.fromkeys(f"{width} x {height} m" for width, height in matches)
     return ", ".join(sizes)
 
@@ -125,11 +129,16 @@ def normalize_data(frame: pd.DataFrame) -> pd.DataFrame:
             normalized[target] = candidates.bfill(axis=1).iloc[:, 0]
         else:
             normalized[target] = frame[sources[0]] if sources else pd.NA
-    text_columns = [column for column in COLUMNS if column not in MATERIAL_COLUMNS and column not in ("Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir")]
+    text_columns = [
+        column
+        for column in COLUMNS
+        if column not in MATERIAL_COLUMNS
+        and column not in ("Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir")
+    ]
     for column in text_columns:
         normalized[column] = normalized[column].astype("string").str.strip()
         normalized[column] = normalized[column].replace({"": pd.NA, "<NA>": pd.NA, "nan": pd.NA})
-    for column in ("Ukuran Panel Toko", "Ukuran Sticker Panel Toko"):
+    for column in ("Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Ukuran Layar"):
         normalized[column] = normalized[column].map(extract_sizes)
     normalized["Nominal Kontrak"] = normalized["Nominal Kontrak"].map(parse_amount)
     contract_material_source = lowered.get("materi kontrak")
@@ -436,9 +445,14 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool,
         st.markdown("**Materi kontrak**")
         material_cols = st.columns(4)
         material_values = {column: material_cols[index].checkbox(column, value=parse_tickmark(current[column]), key=f"material_{index}_{suffix}") for index, column in enumerate(MATERIAL_COLUMNS)}
-        size_col1, size_col2 = st.columns(2)
-        panel_size = size_col1.text_input("Ukuran Panel Toko", value=safe_text(current["Ukuran Panel Toko"]), key=f"panel_size_{suffix}")
-        sticker_size = size_col2.text_input("Ukuran Sticker Panel Toko", value=safe_text(current["Ukuran Sticker Panel Toko"]), key=f"sticker_size_{suffix}")
+        st.markdown("**Detail panel dan layar**")
+        panel_col1, panel_col2, panel_col3 = st.columns(3)
+        panel_size = panel_col1.text_input("Ukuran Panel Toko", value=safe_text(current["Ukuran Panel Toko"]), key=f"panel_size_{suffix}")
+        sticker_size = panel_col2.text_input("Ukuran Sticker Panel Toko", value=safe_text(current["Ukuran Sticker Panel Toko"]), key=f"sticker_size_{suffix}")
+        panel_brand = panel_col3.text_input("Brand Panel", value=safe_text(current["Brand Panel"]), key=f"panel_brand_{suffix}")
+        screen_col1, screen_col2 = st.columns(2)
+        screen_size = screen_col1.text_input("Ukuran Layar", value=safe_text(current["Ukuran Layar"]), key=f"screen_size_{suffix}")
+        screen_brand = screen_col2.text_input("Brand Layar", value=safe_text(current["Brand Layar"]), key=f"screen_brand_{suffix}")
         submitted = st.form_submit_button("Simpan data customer", type="primary")
     values = {
         "ID Outlet": outlet_id.strip() or pd.NA,
@@ -456,6 +470,9 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool,
         **material_values,
         "Ukuran Panel Toko": panel_size.strip() or pd.NA,
         "Ukuran Sticker Panel Toko": sticker_size.strip() or pd.NA,
+        "Brand Panel": panel_brand.strip() or pd.NA,
+        "Ukuran Layar": screen_size.strip() or pd.NA,
+        "Brand Layar": screen_brand.strip() or pd.NA,
     }
     return submitted, values
 
@@ -538,6 +555,13 @@ if active_menu == "Dashboard":
     selected_budget = f3.selectbox("Pos Budget", budget_positions)
     selected_job_category = f4.selectbox("Kategori Pekerjaan", job_categories)
     selected_status = f5.selectbox("Status kontrak", statuses)
+
+    f6, f7 = st.columns(2)
+    panel_sizes = ["Semua"] + sorted(contracts["Ukuran Panel Toko"].dropna().astype(str).unique().tolist())
+    screen_sizes = ["Semua"] + sorted(contracts["Ukuran Layar"].dropna().astype(str).unique().tolist())
+    selected_panel_size = f6.selectbox("Ukuran Panel", panel_sizes)
+    selected_screen_size = f7.selectbox("Ukuran Layar", screen_sizes)
+
     view = contracts.copy()
     if selected_zone != "Semua":
         view = view[view["Zona"] == selected_zone]
@@ -549,6 +573,10 @@ if active_menu == "Dashboard":
         view = view[view["Kategori Pekerjaan"] == selected_job_category]
     if selected_status != "Semua":
         view = view[view["Status Kontrak"] == selected_status]
+    if selected_panel_size != "Semua":
+        view = view[view["Ukuran Panel Toko"] == selected_panel_size]
+    if selected_screen_size != "Semua":
+        view = view[view["Ukuran Layar"] == selected_screen_size]
     st.subheader("Hasil filter data kontrak")
     st.metric("Jumlah customer sesuai filter", f"{len(view):,}".replace(",", "."))
     groups = view["Pos Budget"].map(budget_group)
