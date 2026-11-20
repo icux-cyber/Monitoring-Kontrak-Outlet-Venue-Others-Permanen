@@ -14,7 +14,6 @@ APP_TITLE = "Monitoring Kontrak Outlet"
 DATA_FILE = Path("data") / "DRP & Outlet MCD - DSO Surabaya Barat.xlsx"
 SHEET_NAME = "Monitoring Kontrak Outlet"
 DRP_SHEET_NAME = "Pemesanan Layar DRP"
-DEFAULT_SUPABASE_TABLE = "monitoring_kontrak_outlet"
 MATERIAL_COLUMNS = ["Panel Toko", "Showcase", "Layar Toko", "Shop Sign / Neon Box"]
 SYNC_PANEL_SCREEN_COLUMNS = [
     "Ukuran Sticker Panel Toko",
@@ -297,8 +296,7 @@ def read_branding_workbook(source) -> pd.DataFrame:
     ]
     missing = [column for column in required if column not in columns]
     if missing:
-        missing_text = ", ".join(missing)
-        raise ValueError(f"Kolom wajib tidak ditemukan: {missing_text}.")
+        raise ValueError(f"Kolom wajib tidak ditemukan: {', '.join(missing)}.")
     start_index = columns.index("Tanggal Pekerjaan")
     if start_index + 1 >= len(columns):
         raise ValueError("Kolom Tanggal Pekerjaan Sampai tidak ditemukan.")
@@ -388,138 +386,7 @@ def apply_branding_updates(contracts: pd.DataFrame, branding: pd.DataFrame) -> t
     return normalize_data(updated), unmatched, duplicate_details, len(matched_keys)
 
 
-def _get_supabase_config() -> tuple[str, str, str, bool]:
-    try:
-        url = str(st.secrets.get("SUPABASE_URL", "") or "").strip().rstrip("/")
-        key = str(st.secrets.get("SUPABASE_KEY", "") or "").strip()
-        table = str(st.secrets.get("SUPABASE_TABLE", DEFAULT_SUPABASE_TABLE) or DEFAULT_SUPABASE_TABLE).strip()
-        raw_auto = st.secrets.get("SUPABASE_AUTO_RESTORE", True)
-        auto_restore = raw_auto.strip().lower() in {"1", "true", "yes", "ya"} if isinstance(raw_auto, str) else bool(raw_auto)
-    except FileNotFoundError:
-        url, key, table, auto_restore = "", "", DEFAULT_SUPABASE_TABLE, True
-    return url, key, table, auto_restore
-
-
-def _supabase_headers(api_key: str) -> dict[str, str]:
-    return {
-        "apikey": api_key,
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
-
-
-def _serialize_records_for_supabase(frame: pd.DataFrame, columns: list[str]) -> list[dict]:
-    records = json.loads(frame[columns].to_json(orient="records", date_format="iso", force_ascii=False))
-    cleaned: list[dict] = []
-    for row in records:
-        item: dict = {}
-        for col in columns:
-            val = row.get(col)
-            if val is None or (isinstance(val, float) and pd.isna(val)):
-                item[col] = None
-            elif col in MATERIAL_COLUMNS:
-                item[col] = bool(val)
-            else:
-                item[col] = val
-        cleaned.append(item)
-    return cleaned
-
-
-def backup_to_supabase(
-    frame: pd.DataFrame,
-    supabase_url: str,
-    supabase_key: str,
-    table_name: str = DEFAULT_SUPABASE_TABLE,
-    batch_size: int = 200,
-) -> int:
-    url = str(supabase_url).strip().rstrip("/")
-    key = str(supabase_key).strip()
-    table = str(table_name).strip()
-    if not url.startswith("https://") or not key or not table:
-        raise ValueError("Konfigurasi SUPABASE_URL, SUPABASE_KEY, dan nama tabel belum lengkap.")
-
-    normalized = normalize_data(frame)
-    base_records = _serialize_records_for_supabase(normalized, COLUMNS)
-    now_iso = pd.Timestamp.now(tz="UTC").isoformat()
-    payload_rows = [
-        {"row_no": idx + 1, **rec, "updated_at": now_iso}
-        for idx, rec in enumerate(base_records)
-    ]
-
-    endpoint = f"{url}/rest/v1/{table}"
-    headers = _supabase_headers(key)
-
-    delete_resp = requests.delete(
-        f"{endpoint}?row_no=gte.0",
-        headers=headers,
-        timeout=60,
-    )
-    delete_resp.raise_for_status()
-
-    if not payload_rows:
-        return 0
-
-    inserted_total = 0
-    for start in range(0, len(payload_rows), batch_size):
-        chunk = payload_rows[start : start + batch_size]
-        resp = requests.post(
-            f"{endpoint}?on_conflict=row_no",
-            headers={**headers, "Prefer": "resolution=merge-duplicates,return=minimal"},
-            json=chunk,
-            timeout=60,
-        )
-        resp.raise_for_status()
-        inserted_total += len(chunk)
-
-    return inserted_total
-
-
-def restore_from_supabase(
-    supabase_url: str,
-    supabase_key: str,
-    table_name: str = DEFAULT_SUPABASE_TABLE,
-    page_size: int = 1000,
-) -> pd.DataFrame:
-    url = str(supabase_url).strip().rstrip("/")
-    key = str(supabase_key).strip()
-    table = str(table_name).strip()
-    if not url.startswith("https://") or not key or not table:
-        raise ValueError("Konfigurasi SUPABASE_URL, SUPABASE_KEY, dan nama tabel belum lengkap.")
-
-    endpoint = f"{url}/rest/v1/{table}"
-    headers = {
-        "apikey": key,
-        "Authorization": f"Bearer {key}",
-        "Accept": "application/json",
-    }
-
-    all_rows: list[dict] = []
-    offset = 0
-    while True:
-        resp = requests.get(
-            endpoint,
-            headers={**headers, "Range": f"{offset}-{offset + page_size - 1}"},
-            params={"select": "*", "order": "row_no.asc.nullslast"},
-            timeout=60,
-        )
-        resp.raise_for_status()
-        batch = resp.json()
-        if not isinstance(batch, list):
-            raise ValueError("Respons dari Supabase bukan list data yang valid.")
-        all_rows.extend(batch)
-        if len(batch) < page_size:
-            break
-        offset += page_size
-
-    if not all_rows:
-        return pd.DataFrame(columns=COLUMNS)
-
-    raw_df = pd.DataFrame(all_rows)
-    return normalize_data(raw_df)
-
-
-def load_local_data() -> tuple[pd.DataFrame, str | None]:
+def load_initial_data() -> tuple[pd.DataFrame, str | None]:
     if not DATA_FILE.exists():
         return pd.DataFrame(columns=COLUMNS), None
     try:
@@ -545,48 +412,6 @@ def validate_data(frame: pd.DataFrame) -> list[str]:
     if invalid_period.any():
         errors.append("Tanggal akhir kontrak tidak boleh sebelum tanggal awal.")
     return errors
-
-
-def save_data(frame: pd.DataFrame) -> None:
-    errors = validate_data(frame)
-    if errors:
-        raise ValueError("\n".join(errors))
-    normalized = normalize_data(frame)
-    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    normalized.to_excel(DATA_FILE, sheet_name=SHEET_NAME, index=False, engine="openpyxl")
-
-
-def init_session_data() -> None:
-    if "auto_restore_enabled" not in st.session_state:
-        _, _, _, default_auto = _get_supabase_config()
-        st.session_state.auto_restore_enabled = default_auto
-
-    if "contracts" in st.session_state:
-        return
-
-    sb_url, sb_key, sb_table, _ = _get_supabase_config()
-    if st.session_state.auto_restore_enabled and sb_url and sb_key:
-        try:
-            restored = restore_from_supabase(sb_url, sb_key, sb_table)
-            if not restored.empty and not validate_data(restored):
-                try:
-                    save_data(restored)
-                except Exception:
-                    pass
-                st.session_state.contracts = restored
-                st.session_state.load_warning = None
-                st.session_state.last_restore_info = f"Auto-restore dari Supabase ({len(restored)} baris)."
-                return
-        except Exception as error:
-            local_df, local_warn = load_local_data()
-            st.session_state.contracts = local_df
-            fallback_msg = f"Auto-restore Supabase gagal ({error}). Memuat data lokal."
-            st.session_state.load_warning = f"{fallback_msg} {local_warn}" if local_warn else fallback_msg
-            return
-
-    local_df, local_warn = load_local_data()
-    st.session_state.contracts = local_df
-    st.session_state.load_warning = local_warn
 
 
 def add_contract_status(frame: pd.DataFrame, today: date | None = None) -> pd.DataFrame:
@@ -682,82 +507,13 @@ def render_dashboard_table(title: str, frame: pd.DataFrame) -> None:
     st.dataframe(format_outlet_table(sorted_frame), use_container_width=True, hide_index=True)
 
 
-def render_excel_io_section(contracts_df: pd.DataFrame) -> None:
-    st.subheader("Upload / Download Excel")
-    upload = st.file_uploader("Upload workbook Excel (.xlsx)", type=["xlsx"], key="workbook_upload")
-    if st.button("Import dan ganti data", type="primary", key="import_contract_workbook"):
-        if upload is None:
-            st.warning("Pilih file Excel terlebih dahulu.")
-        else:
-            try:
-                imported = read_workbook(upload)
-                problems = validate_data(imported)
-                if problems:
-                    st.error("\n".join(problems))
-                else:
-                    save_data(imported)
-                    st.session_state.contracts = imported
-                    st.session_state.load_warning = None
-                    st.success(f"Berhasil mengimpor {len(imported)} baris.")
-                    st.rerun()
-            except Exception as error:
-                st.error(f"Gagal mengimpor Excel: {error}")
-
-    with st.expander("Sinkronkan Ukuran & Brand Panel / Layar berdasarkan ID Customer"):
-        sync_upload = st.file_uploader(
-            "Upload file/sheet sumber Panel & Layar (.xlsx)",
-            type=["xlsx"],
-            key="sync_panel_screen_upload",
-        )
-        overwrite_sync = st.checkbox(
-            "Timpa nilai yang sudah terisi jika ID Customer cocok",
-            value=False,
-            key="overwrite_panel_screen_sync",
-        )
-        if st.button("Hubungkan ke Daftar customer", key="btn_sync_panel_screen"):
-            if sync_upload is None:
-                st.warning("Pilih file Excel sumber terlebih dahulu.")
-            else:
-                try:
-                    drp_source = read_drp_sheet(sync_upload)
-                    if drp_source is not None and not drp_source.empty:
-                        source_frame = drp_source
-                    else:
-                        sync_upload.seek(0)
-                        source_frame = read_workbook(sync_upload)
-                    merged_df, updated_cnt, missing_list = merge_panel_screen_by_id(
-                        contracts_df,
-                        source_frame,
-                        overwrite_existing=overwrite_sync,
-                    )
-                    save_data(merged_df)
-                    st.session_state.contracts = merged_df
-                    st.success(f"Sinkronisasi selesai: {updated_cnt} baris customer diperbarui.")
-                    if missing_list:
-                        missing_preview = ", ".join(missing_list[:15])
-                        st.info(f"{len(missing_list)} ID Customer tidak ditemukan di Daftar customer: {missing_preview}")
-                    st.rerun()
-                except Exception as error:
-                    st.error(f"Gagal sinkronisasi data panel/layar: {error}")
-
-    excel_col1, excel_col2 = st.columns(2)
-    excel_col1.download_button(
-        "Download data Excel",
-        data=excel_bytes(contracts_df),
-        file_name="Monitoring_Kontrak_Outlet.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        key="btn_download_data_excel",
-    )
-    excel_col2.download_button(
-        "Download template Excel",
-        data=excel_bytes(pd.DataFrame(columns=COLUMNS)),
-        file_name="Template_Monitoring_Kontrak_Outlet.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        key="btn_download_template_excel",
-    )
-    st.caption("Import akan mengganti seluruh data customer. Penyimpanan lokal Streamlit Cloud dapat bersifat sementara.")
+def save_data(frame: pd.DataFrame) -> None:
+    errors = validate_data(frame)
+    if errors:
+        raise ValueError("\n".join(errors))
+    normalized = normalize_data(frame)
+    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    normalized.to_excel(DATA_FILE, sheet_name=SHEET_NAME, index=False, engine="openpyxl")
 
 
 def safe_text(value) -> str:
@@ -833,27 +589,19 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool,
 
 
 st.title("📊 Monitoring Kontrak Outlet")
-st.caption("Pantau data customer dan kontrak, lihat peringatan masa berlaku, serta kelola data melalui form, Excel, dan Supabase.")
-
-init_session_data()
-
-if st.session_state.get("load_warning"):
+st.caption("Pantau data customer dan kontrak, lihat peringatan masa berlaku, serta kelola data melalui form dan Excel.")
+if "contracts" not in st.session_state:
+    initial, warning = load_initial_data()
+    st.session_state.contracts = initial
+    st.session_state.load_warning = warning
+if st.session_state.load_warning:
     st.warning(st.session_state.load_warning)
-elif st.session_state.get("last_restore_info"):
-    st.caption(st.session_state.last_restore_info)
 
 with st.sidebar:
     st.header("Menu")
     active_menu = st.radio(
         "Pilih halaman",
-        [
-            "Dashboard",
-            "Edit data customer",
-            "Tambah customer baru",
-            "Eksport Data Branding (Excel) - Data SPKS",
-            "Backup & Restore Supabase",
-            "Backup ke Google Sheet",
-        ],
+        ["Dashboard", "Edit data customer", "Tambah customer baru", "Import data branding", "Backup ke Google Sheet"],
         key="main_menu",
     )
 
@@ -871,7 +619,78 @@ if active_menu == "Dashboard":
         st.error(f"Perhatian: {expired} kontrak sudah berakhir.")
     if soon:
         st.warning(f"Pengingat: {soon} kontrak akan berakhir dalam 90 hari.")
+    st.subheader("Upload / Download Excel")
+    upload = st.file_uploader("Upload workbook Excel (.xlsx)", type=["xlsx"], key="workbook_upload")
+    if st.button("Import dan ganti data", type="primary", key="import_contract_workbook"):
+        if upload is None:
+            st.warning("Pilih file Excel terlebih dahulu.")
+        else:
+            try:
+                imported = read_workbook(upload)
+                problems = validate_data(imported)
+                if problems:
+                    st.error("\n".join(problems))
+                else:
+                    save_data(imported)
+                    st.session_state.contracts = imported
+                    st.session_state.load_warning = None
+                    st.success(f"Berhasil mengimpor {len(imported)} baris.")
+                    st.rerun()
+            except Exception as error:
+                st.error(f"Gagal mengimpor Excel: {error}")
 
+    with st.expander("Sinkronkan Ukuran & Brand Panel / Layar berdasarkan ID Customer"):
+        sync_upload = st.file_uploader(
+            "Upload file/sheet sumber Panel & Layar (.xlsx)",
+            type=["xlsx"],
+            key="sync_panel_screen_upload",
+        )
+        overwrite_sync = st.checkbox(
+            "Timpa nilai yang sudah terisi jika ID Customer cocok",
+            value=False,
+            key="overwrite_panel_screen_sync",
+        )
+        if st.button("Hubungkan ke Daftar customer", key="btn_sync_panel_screen"):
+            if sync_upload is None:
+                st.warning("Pilih file Excel sumber terlebih dahulu.")
+            else:
+                try:
+                    drp_source = read_drp_sheet(sync_upload)
+                    if drp_source is not None and not drp_source.empty:
+                        source_frame = drp_source
+                    else:
+                        sync_upload.seek(0)
+                        source_frame = read_workbook(sync_upload)
+                    merged_df, updated_cnt, missing_list = merge_panel_screen_by_id(
+                        st.session_state.contracts,
+                        source_frame,
+                        overwrite_existing=overwrite_sync,
+                    )
+                    save_data(merged_df)
+                    st.session_state.contracts = merged_df
+                    st.success(f"Sinkronisasi selesai: {updated_cnt} baris customer diperbarui.")
+                    if missing_list:
+                        st.info(f"{len(missing_list)} ID Customer tidak ditemukan di Daftar customer: {', '.join(missing_list[:15])}")
+                    st.rerun()
+                except Exception as error:
+                    st.error(f"Gagal sinkronisasi data panel/layar: {error}")
+
+    excel_col1, excel_col2 = st.columns(2)
+    excel_col1.download_button(
+        "Download data Excel",
+        data=excel_bytes(st.session_state.contracts),
+        file_name="Monitoring_Kontrak_Outlet.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+    excel_col2.download_button(
+        "Download template Excel",
+        data=excel_bytes(pd.DataFrame(columns=COLUMNS)),
+        file_name="Template_Monitoring_Kontrak_Outlet.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+    st.caption("Import akan mengganti seluruh data customer. Penyimpanan lokal Streamlit Cloud dapat bersifat sementara.")
     st.subheader("Filter data kontrak")
     f1, f2, f3, f4, f5 = st.columns(5)
     zones = ["Semua"] + sorted(contracts["Zona"].dropna().astype(str).unique().tolist())
@@ -912,14 +731,8 @@ if active_menu == "Dashboard":
     regular_view = view.loc[groups.eq("")]
     venue_view = view.loc[groups.eq("Venue")]
     other_permanent_view = view.loc[groups.eq("Others Permanen")]
-    download_columns = st.columns(4)
+    download_columns = st.columns(3)
     download_specs = [
-        (
-            "Download Daftar customer - All Kategori Excel",
-            view,
-            "Daftar_Customer_All_Kategori.xlsx",
-            "download_all_category_contracts",
-        ),
         (
             "Download Daftar customer - Retail Suplay kontrak Excel",
             regular_view,
@@ -949,7 +762,7 @@ if active_menu == "Dashboard":
             use_container_width=True,
         )
     if view.empty:
-        st.info("Belum ada data yang cocok. Buka menu **Eksport Data Branding (Excel) - Data SPKS** untuk mengimpor data Excel.")
+        st.info("Belum ada data yang cocok. Gunakan bagian Upload / Download Excel pada dashboard untuk memasukkan data.")
     else:
         selected_group = budget_group(selected_budget)
         if selected_budget == "Semua":
@@ -966,7 +779,7 @@ if active_menu == "Dashboard":
 elif active_menu == "Edit data customer":
     st.header("Edit data customer")
     if contracts.empty:
-        st.info("Data customer belum ada. Gunakan menu **Tambah customer baru** atau **Eksport Data Branding (Excel) - Data SPKS**.")
+        st.info("Data customer belum ada. Gunakan menu **Tambah customer baru** atau bagian Upload / Download Excel pada dashboard.")
     else:
         record_options = [
             f"{i} | {safe_text(row['ID Outlet']) or 'Tanpa ID'} | {safe_text(row['Nama Customer']) or 'Tanpa nama'}"
@@ -1004,27 +817,151 @@ elif active_menu == "Edit data customer":
 
 elif active_menu == "Tambah customer baru":
     st.header("Tambah customer baru")
-    blank_record = pd.Series({column: pd.NA for column in COLUMNS})
-    submitted, new_record = render_outlet_form(blank_record, None)
-    if submitted:
-        updated_data = pd.concat([contracts[COLUMNS], pd.DataFrame([new_record])], ignore_index=True)
-        problems = validate_data(updated_data)
-        if problems:
-            st.error("\n".join(problems))
-        else:
-            try:
-                save_data(updated_data)
-                st.session_state.contracts = normalize_data(updated_data)
-                st.success("Customer baru berhasil ditambahkan.")
-                st.rerun()
-            except Exception as error:
-                st.error(f"Gagal menyimpan customer baru: {error}")
+    tab_form, tab_excel_batch = st.tabs([
+        "Input manual (Form)",
+        "Download template & upload Excel",
+    ])
 
-elif active_menu == "Eksport Data Branding (Excel) - Data SPKS":
-    st.header("Eksport Data Branding (Excel) - Data SPKS")
-    render_excel_io_section(st.session_state.contracts)
-    st.divider()
-    st.subheader("Import data outlet branding (SPKS)")
+    with tab_form:
+        blank_record = pd.Series({column: pd.NA for column in COLUMNS})
+        submitted, new_record = render_outlet_form(blank_record, None)
+        if submitted:
+            updated_data = pd.concat([contracts[COLUMNS], pd.DataFrame([new_record])], ignore_index=True)
+            problems = validate_data(updated_data)
+            if problems:
+                st.error("\n".join(problems))
+            else:
+                try:
+                    save_data(updated_data)
+                    st.session_state.contracts = normalize_data(updated_data)
+                    st.success("Customer baru berhasil ditambahkan dan disimpan ke database.")
+                    st.rerun()
+                except Exception as error:
+                    st.error(f"Gagal menyimpan customer baru: {error}")
+
+    with tab_excel_batch:
+        st.subheader("1. Download template Excel tambah customer baru")
+        st.caption(
+            "Isi baris customer baru sesuai format kolom template. Untuk kolom centang materi "
+            "(Panel Toko, Showcase, Layar Toko, Shop Sign / Neon Box), gunakan tanda ✓ atau YA/TRUE."
+        )
+        sample_row = pd.DataFrame(
+            [{
+                "ID Outlet": "501X9999",
+                "Nama Customer": "CONTOH TOKO BARU",
+                "Alamat": "Jl. Contoh No. 123, Surabaya",
+                "Zona": "Bubutan",
+                "Sektor": "Retail Supply",
+                "Pos Budget": "Small Retailer",
+                "Kategori Outlet": "Warung",
+                "Kategori Pekerjaan": "DRP",
+                "Brand": "DJARUM SUPER",
+                "Nominal Kontrak": 1500000,
+                "Periode Kontrak Awal": pd.Timestamp("2026-01-01"),
+                "Periode Kontrak Akhir": pd.Timestamp("2026-12-31"),
+                "Panel Toko": True,
+                "Showcase": False,
+                "Layar Toko": False,
+                "Shop Sign / Neon Box": False,
+                "Ukuran Panel Toko": "1 x 3 m",
+                "Ukuran Sticker Panel Toko": "1 x 2 m",
+                "Brand Panel": "Djarum Super",
+                "Ukuran Layar": pd.NA,
+                "Brand Layar": pd.NA,
+            }]
+        )
+        dl_col1, dl_col2 = st.columns(2)
+        dl_col1.download_button(
+            "Download template Excel (kosong)",
+            data=excel_bytes(pd.DataFrame(columns=COLUMNS)),
+            file_name="Template_Tambah_Customer_Baru.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="btn_dl_template_tambah_customer_kosong",
+            use_container_width=True,
+        )
+        dl_col2.download_button(
+            "Download template Excel + contoh baris",
+            data=excel_bytes(sample_row[COLUMNS]),
+            file_name="Template_Tambah_Customer_Baru_Contoh.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="btn_dl_template_tambah_customer_contoh",
+            use_container_width=True,
+        )
+
+        st.divider()
+        st.subheader("2. Upload Excel & simpan customer baru ke database")
+        batch_upload = st.file_uploader(
+            "Upload file Excel customer baru (.xlsx)",
+            type=["xlsx"],
+            key="batch_new_customer_upload",
+        )
+        skip_duplicate_id = st.checkbox(
+            "Lewati baris jika ID Outlet sudah ada di database (hindari duplikat)",
+            value=True,
+            key="skip_dup_id_new_customer",
+        )
+
+        if st.button("Simpan customer baru ke database", type="primary", key="btn_save_batch_new_customer"):
+            if batch_upload is None:
+                st.warning("Pilih file Excel customer baru terlebih dahulu.")
+            else:
+                try:
+                    new_rows = read_workbook(batch_upload)
+                    if new_rows.empty:
+                        st.warning("Tidak ada baris data customer valid yang ditemukan pada file Excel.")
+                    else:
+                        existing_keys = {
+                            customer_id_key(val)
+                            for val in contracts["ID Outlet"].dropna()
+                            if customer_id_key(val)
+                        }
+                        skipped_ids: list[str] = []
+                        rows_to_add: list[pd.Series] = []
+                        seen_batch_keys: set[str] = set()
+
+                        for _, r in new_rows.iterrows():
+                            k = customer_id_key(r.get("ID Outlet"))
+                            if skip_duplicate_id and k:
+                                if k in existing_keys or k in seen_batch_keys:
+                                    skipped_ids.append(str(r.get("ID Outlet")).strip())
+                                    continue
+                                seen_batch_keys.add(k)
+                            rows_to_add.append(r[COLUMNS])
+
+                        if not rows_to_add:
+                            st.info(
+                                f"Tidak ada customer baru yang ditambahkan. "
+                                f"{len(skipped_ids)} baris dilewati karena ID Outlet sudah terdaftar."
+                            )
+                        else:
+                            combined = pd.concat(
+                                [contracts[COLUMNS], pd.DataFrame(rows_to_add)],
+                                ignore_index=True,
+                            )
+                            problems = validate_data(combined)
+                            if problems:
+                                st.error("\n".join(problems))
+                            else:
+                                save_data(combined)
+                                normalized_combined = normalize_data(combined)
+                                st.session_state.contracts = normalized_combined
+                                st.session_state.load_warning = None
+                                skipped_preview = ", ".join(skipped_ids[:15])
+                                st.success(
+                                    f"Berhasil menyimpan {len(rows_to_add)} customer baru ke database "
+                                    f"(total data aktif: {len(normalized_combined)} baris)."
+                                )
+                                if skipped_ids:
+                                    st.info(
+                                        f"{len(skipped_ids)} baris dilewati (ID sudah ada): "
+                                        f"{skipped_preview}"
+                                    )
+                                st.rerun()
+                except Exception as error:
+                    st.error(f"Gagal memproses/menyimpan file Excel customer baru: {error}")
+
+elif active_menu == "Import data branding":
+    st.header("Import data outlet branding")
     st.caption(
         "Data dengan ID Customer ganda dipilih berdasarkan Tanggal Pekerjaan Sampai terbaru. "
         "ID yang ditemukan memperbarui data customer; ID yang belum ada tidak ditambahkan ke tabel."
@@ -1120,79 +1057,6 @@ elif active_menu == "Eksport Data Branding (Excel) - Data SPKS":
                 "Tanggal Pekerjaan Sampai", "No. Dokumen",
             ]
             st.dataframe(without_ids[missing_columns], use_container_width=True, hide_index=True)
-
-elif active_menu == "Backup & Restore Supabase":
-    st.header("Backup & Restore Supabase")
-    st.caption(
-        "Simpan snapshot data Daftar customer ke tabel Supabase dan pulihkan otomatis saat membuka atau me-reload halaman web."
-    )
-    cfg_url, cfg_key, cfg_table, cfg_auto = _get_supabase_config()
-
-    c1, c2 = st.columns(2)
-    sb_url = c1.text_input("Supabase Project URL", value=cfg_url, placeholder="https://xxxx.supabase.co", key="sb_url_input")
-    sb_table = c2.text_input("Nama Tabel Supabase", value=cfg_table, key="sb_table_input")
-    sb_key = st.text_input(
-        "Supabase API Key (anon / service_role)",
-        value=cfg_key,
-        type="password",
-        help="Disarankan menyimpan SUPABASE_URL, SUPABASE_KEY, dan SUPABASE_TABLE di Streamlit Secrets.",
-        key="sb_key_input",
-    )
-    auto_restore_toggle = st.toggle(
-        "Auto-restore dari Supabase saat buka / reload halaman",
-        value=bool(st.session_state.get("auto_restore_enabled", cfg_auto)),
-        key="toggle_auto_restore_supabase",
-    )
-    st.session_state.auto_restore_enabled = auto_restore_toggle
-
-    st.divider()
-    act_left, act_right = st.columns(2)
-
-    with act_left:
-        st.subheader("Backup ke Supabase")
-        st.info(f"Data aktif siap dibackup: {len(st.session_state.contracts):,} outlet.".replace(",", "."))
-        st.warning("Backup akan mengganti seluruh isi tabel Supabase dengan data Daftar customer saat ini.")
-        if st.button("Backup data ke Supabase", type="primary", key="btn_backup_supabase"):
-            try:
-                saved_count = backup_to_supabase(
-                    st.session_state.contracts,
-                    supabase_url=sb_url,
-                    supabase_key=sb_key,
-                    table_name=sb_table,
-                )
-                st.success(f"Backup ke Supabase berhasil: {saved_count} baris tersimpan di tabel '{sb_table}'.")
-            except Exception as error:
-                st.error(f"Backup ke Supabase gagal: {error}")
-
-    with act_right:
-        st.subheader("Restore dari Supabase")
-        st.info("Mengambil seluruh data dari tabel Supabase dan menjadikannya data aktif di aplikasi.")
-        confirm_restore = st.checkbox(
-            "Saya mengerti restore akan menimpa data customer yang sedang tampil di aplikasi",
-            key="confirm_restore_supabase",
-        )
-        if st.button("Restore data dari Supabase", type="secondary", key="btn_restore_supabase"):
-            if not confirm_restore:
-                st.warning("Centang konfirmasi terlebih dahulu sebelum melakukan restore.")
-            else:
-                try:
-                    restored_df = restore_from_supabase(
-                        supabase_url=sb_url,
-                        supabase_key=sb_key,
-                        table_name=sb_table,
-                    )
-                    problems = validate_data(restored_df)
-                    if problems:
-                        st.error("\n".join(problems))
-                    else:
-                        save_data(restored_df)
-                        st.session_state.contracts = restored_df
-                        st.session_state.load_warning = None
-                        st.session_state.last_restore_info = f"Restore manual dari Supabase ({len(restored_df)} baris)."
-                        st.success(f"Restore dari Supabase berhasil: {len(restored_df)} baris dimuat.")
-                        st.rerun()
-                except Exception as error:
-                    st.error(f"Restore dari Supabase gagal: {error}")
 
 else:
     st.header("Backup ke Google Sheet")
