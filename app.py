@@ -434,30 +434,9 @@ def add_contract_status(frame: pd.DataFrame, today: date | None = None) -> pd.Da
     return result
 
 
-def format_nominal_id(value) -> str:
-    parsed = parse_amount(value)
-    if pd.isna(parsed):
-        return ""
-    return f"{float(parsed):,.0f}".replace(",", ".")
-
-
-def format_date_ddmmyyyy(value) -> str:
-    if pd.isna(value) or str(value).strip() == "":
-        return ""
-    dt = pd.to_datetime(value, errors="coerce", dayfirst=True)
-    if pd.isna(dt):
-        return ""
-    return dt.strftime("%d/%m/%Y")
-
-
 def excel_bytes(frame: pd.DataFrame) -> bytes:
     output = BytesIO()
     export = frame.copy()
-    if "Nominal Kontrak" in export:
-        export["Nominal Kontrak"] = export["Nominal Kontrak"].map(format_nominal_id)
-    for column in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
-        if column in export:
-            export[column] = export[column].map(format_date_ddmmyyyy)
     for column in MATERIAL_COLUMNS:
         if column in export:
             export[column] = export[column].map(lambda checked: "✓" if parse_tickmark(checked) else "")
@@ -490,13 +469,96 @@ def backup_to_google_sheet(frame: pd.DataFrame, url: str) -> int:
     return int(result.get("row_count", len(records)))
 
 
+def _supabase_headers(api_key: str) -> dict[str, str]:
+    key = str(api_key or "").strip()
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+
+def _supabase_config() -> tuple[str, str, str]:
+    try:
+        url = str(st.secrets.get("SUPABASE_URL", "") or "").strip().rstrip("/")
+    except FileNotFoundError:
+        url = ""
+    try:
+        key = (
+            str(
+                st.secrets.get("SUPABASE_SERVICE_ROLE_KEY", "")
+                or st.secrets.get("SUPABASE_ANON_KEY", "")
+                or st.secrets.get("SUPABASE_KEY", "")
+                or ""
+            )
+            .strip()
+        )
+    except FileNotFoundError:
+        key = ""
+    try:
+        table = str(st.secrets.get("SUPABASE_TABLE", "monitoring_kontrak_outlet") or "monitoring_kontrak_outlet").strip()
+    except FileNotFoundError:
+        table = "monitoring_kontrak_outlet"
+    return url, key, table
+
+
+def backup_to_supabase(frame: pd.DataFrame, url: str, api_key: str, table: str) -> int:
+    clean_url = str(url or "").strip().rstrip("/")
+    clean_table = str(table or "").strip()
+    if not clean_url.startswith("https://") or not clean_table:
+        raise ValueError("SUPABASE_URL dan nama tabel Supabase harus valid.")
+    normalized = normalize_data(frame)
+    records = json.loads(normalized.to_json(orient="records", date_format="iso", force_ascii=False))
+    headers = _supabase_headers(api_key)
+    endpoint = f"{clean_url}/rest/v1/{clean_table}"
+
+    del_resp = requests.delete(f"{endpoint}?id=not.is.null", headers=headers, timeout=60)
+    if del_resp.status_code >= 400:
+        raise ValueError(f"Gagal membersihkan data lama di Supabase ({del_resp.status_code}): {del_resp.text}")
+
+    if records:
+        payload = [{"sheet_name": SHEET_NAME, "payload_json": records}]
+        ins_resp = requests.post(
+            endpoint,
+            headers={**headers, "Prefer": "return=representation"},
+            json=payload,
+            timeout=60,
+        )
+        ins_resp.raise_for_status()
+    return len(records)
+
+
+def restore_from_supabase(url: str, api_key: str, table: str) -> pd.DataFrame:
+    clean_url = str(url or "").strip().rstrip("/")
+    clean_table = str(table or "").strip()
+    if not clean_url.startswith("https://") or not clean_table:
+        raise ValueError("SUPABASE_URL dan nama tabel Supabase harus valid.")
+    headers = _supabase_headers(api_key)
+    endpoint = f"{clean_url}/rest/v1/{clean_table}?select=payload_json,created_at&order=created_at.desc&limit=1"
+    resp = requests.get(endpoint, headers=headers, timeout=60)
+    resp.raise_for_status()
+    rows = resp.json()
+    if not isinstance(rows, list) or not rows:
+        return pd.DataFrame(columns=COLUMNS)
+    raw_records = rows[0].get("payload_json")
+    if isinstance(raw_records, str):
+        raw_records = json.loads(raw_records)
+    if not isinstance(raw_records, list) or not raw_records:
+        return pd.DataFrame(columns=COLUMNS)
+    return normalize_data(pd.DataFrame(raw_records))
+
+
 def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
     display_frame = frame.copy()
     if "Nominal Kontrak" in display_frame:
-        display_frame["Nominal Kontrak"] = display_frame["Nominal Kontrak"].map(format_nominal_id)
+        display_frame["Nominal Kontrak"] = display_frame["Nominal Kontrak"].map(
+            lambda value: "" if pd.isna(value) else f"{float(value):,.0f}".replace(",", ".")
+        )
     for column in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
         if column in display_frame:
-            display_frame[column] = display_frame[column].map(format_date_ddmmyyyy)
+            display_frame[column] = pd.to_datetime(display_frame[column], errors="coerce").map(
+                lambda value: "" if pd.isna(value) else value.strftime("%d/%m/%Y")
+            )
     for column in MATERIAL_COLUMNS:
         if column in display_frame:
             display_frame[column] = display_frame[column].map(lambda checked: "✓" if parse_tickmark(checked) else "")
@@ -565,18 +627,8 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool,
                 value=0.0 if pd.isna(parsed_amount) else float(parsed_amount),
                 key=f"amount_{suffix}",
             )
-            contract_start = st.date_input(
-                "Periode Kontrak Awal",
-                value=safe_date(current["Periode Kontrak Awal"]),
-                format="DD/MM/YYYY",
-                key=f"start_{suffix}",
-            )
-            contract_end = st.date_input(
-                "Periode Kontrak Akhir",
-                value=safe_date(current["Periode Kontrak Akhir"]),
-                format="DD/MM/YYYY",
-                key=f"end_{suffix}",
-            )
+            contract_start = st.date_input("Periode Kontrak Awal", value=safe_date(current["Periode Kontrak Awal"]), key=f"start_{suffix}")
+            contract_end = st.date_input("Periode Kontrak Akhir", value=safe_date(current["Periode Kontrak Akhir"]), key=f"end_{suffix}")
         st.markdown("**Materi kontrak**")
         material_cols = st.columns(4)
         material_values = {
@@ -628,7 +680,14 @@ with st.sidebar:
     st.header("Menu")
     active_menu = st.radio(
         "Pilih halaman",
-        ["Dashboard", "Edit data customer", "Tambah customer baru", "Import data branding", "Backup ke Google Sheet"],
+        [
+            "Dashboard",
+            "Edit data customer",
+            "Tambah customer baru",
+            "Import data branding",
+            "Backup & Restore Supabase",
+            "Backup ke Google Sheet",
+        ],
         key="main_menu",
     )
 
@@ -884,8 +943,8 @@ elif active_menu == "Tambah customer baru":
                 "Kategori Pekerjaan": "DRP",
                 "Brand": "DJARUM SUPER",
                 "Nominal Kontrak": 1500000,
-                "Periode Kontrak Awal": "01/01/2026",
-                "Periode Kontrak Akhir": "31/12/2026",
+                "Periode Kontrak Awal": pd.Timestamp("2026-01-01"),
+                "Periode Kontrak Akhir": pd.Timestamp("2026-12-31"),
                 "Panel Toko": True,
                 "Showcase": False,
                 "Layar Toko": False,
@@ -1085,7 +1144,46 @@ elif active_menu == "Import data branding":
             ]
             st.dataframe(without_ids[missing_columns], use_container_width=True, hide_index=True)
 
-else:
+elif active_menu == "Backup & Restore Supabase":
+    st.header("Backup & Restore ke Supabase")
+    st.caption(
+        "Simpan snapshot data kontrak ke tabel Supabase dan pulihkan kembali kapan saja."
+    )
+    sb_url, sb_key, sb_table = _supabase_config()
+    if not sb_url or not sb_key:
+        st.warning(
+            "Atur SUPABASE_URL dan SUPABASE_SERVICE_ROLE_KEY (atau SUPABASE_ANON_KEY) "
+            "di Streamlit secrets untuk mengaktifkan Backup & Restore Supabase."
+        )
+    else:
+        st.info(f"Tabel target: {sb_table} | Data aktif saat ini: {len(st.session_state.contracts)} outlet.")
+        b_col, r_col = st.columns(2)
+        with b_col:
+            st.subheader("Backup ke Supabase")
+            if st.button("Backup data ke Supabase", type="primary", key="btn_backup_supabase"):
+                try:
+                    saved_cnt = backup_to_supabase(st.session_state.contracts, sb_url, sb_key, sb_table)
+                    st.success(f"Backup berhasil: {saved_cnt} baris tersimpan di Supabase.")
+                except Exception as error:
+                    st.error(f"Backup ke Supabase gagal: {error}")
+        with r_col:
+            st.subheader("Restore dari Supabase")
+            if st.button("Restore data dari Supabase", type="secondary", key="btn_restore_supabase"):
+                try:
+                    restored_df = restore_from_supabase(sb_url, sb_key, sb_table)
+                    problems = validate_data(restored_df)
+                    if problems:
+                        st.error("\n".join(problems))
+                    else:
+                        save_data(restored_df)
+                        st.session_state.contracts = restored_df
+                        st.session_state.load_warning = None
+                        st.success(f"Restore berhasil: {len(restored_df)} baris dimuat dari Supabase.")
+                        st.rerun()
+                except Exception as error:
+                    st.error(f"Restore dari Supabase gagal: {error}")
+
+elif active_menu == "Backup ke Google Sheet":
     st.header("Backup ke Google Sheet")
     st.caption(
         "Backup mengirim seluruh data Daftar customer dan mengganti isi tab "
