@@ -297,7 +297,8 @@ def read_branding_workbook(source) -> pd.DataFrame:
     ]
     missing = [column for column in required if column not in columns]
     if missing:
-        raise ValueError(f"Kolom wajib tidak ditemukan: {', '.join(missing)}.")
+        missing_text = ", ".join(missing)
+        raise ValueError(f"Kolom wajib tidak ditemukan: {missing_text}.")
     start_index = columns.index("Tanggal Pekerjaan")
     if start_index + 1 >= len(columns):
         raise ValueError("Kolom Tanggal Pekerjaan Sampai tidak ditemukan.")
@@ -681,6 +682,84 @@ def render_dashboard_table(title: str, frame: pd.DataFrame) -> None:
     st.dataframe(format_outlet_table(sorted_frame), use_container_width=True, hide_index=True)
 
 
+def render_excel_io_section(contracts_df: pd.DataFrame) -> None:
+    st.subheader("Upload / Download Excel")
+    upload = st.file_uploader("Upload workbook Excel (.xlsx)", type=["xlsx"], key="workbook_upload")
+    if st.button("Import dan ganti data", type="primary", key="import_contract_workbook"):
+        if upload is None:
+            st.warning("Pilih file Excel terlebih dahulu.")
+        else:
+            try:
+                imported = read_workbook(upload)
+                problems = validate_data(imported)
+                if problems:
+                    st.error("\n".join(problems))
+                else:
+                    save_data(imported)
+                    st.session_state.contracts = imported
+                    st.session_state.load_warning = None
+                    st.success(f"Berhasil mengimpor {len(imported)} baris.")
+                    st.rerun()
+            except Exception as error:
+                st.error(f"Gagal mengimpor Excel: {error}")
+
+    with st.expander("Sinkronkan Ukuran & Brand Panel / Layar berdasarkan ID Customer"):
+        sync_upload = st.file_uploader(
+            "Upload file/sheet sumber Panel & Layar (.xlsx)",
+            type=["xlsx"],
+            key="sync_panel_screen_upload",
+        )
+        overwrite_sync = st.checkbox(
+            "Timpa nilai yang sudah terisi jika ID Customer cocok",
+            value=False,
+            key="overwrite_panel_screen_sync",
+        )
+        if st.button("Hubungkan ke Daftar customer", key="btn_sync_panel_screen"):
+            if sync_upload is None:
+                st.warning("Pilih file Excel sumber terlebih dahulu.")
+            else:
+                try:
+                    drp_source = read_drp_sheet(sync_upload)
+                    if drp_source is not None and not drp_source.empty:
+                        source_frame = drp_source
+                    else:
+                        sync_upload.seek(0)
+                        source_frame = read_workbook(sync_upload)
+                    merged_df, updated_cnt, missing_list = merge_panel_screen_by_id(
+                        contracts_df,
+                        source_frame,
+                        overwrite_existing=overwrite_sync,
+                    )
+                    save_data(merged_df)
+                    st.session_state.contracts = merged_df
+                    st.success(f"Sinkronisasi selesai: {updated_cnt} baris customer diperbarui.")
+                    if missing_list:
+                        missing_preview = ", ".join(missing_list[:15])
+                        st.info(f"{len(missing_list)} ID Customer tidak ditemukan di Daftar customer: {missing_preview}")
+                    st.rerun()
+                except Exception as error:
+                    st.error(f"Gagal sinkronisasi data panel/layar: {error}")
+
+    excel_col1, excel_col2 = st.columns(2)
+    excel_col1.download_button(
+        "Download data Excel",
+        data=excel_bytes(contracts_df),
+        file_name="Monitoring_Kontrak_Outlet.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        key="btn_download_data_excel",
+    )
+    excel_col2.download_button(
+        "Download template Excel",
+        data=excel_bytes(pd.DataFrame(columns=COLUMNS)),
+        file_name="Template_Monitoring_Kontrak_Outlet.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        key="btn_download_template_excel",
+    )
+    st.caption("Import akan mengganti seluruh data customer. Penyimpanan lokal Streamlit Cloud dapat bersifat sementara.")
+
+
 def safe_text(value) -> str:
     return "" if pd.isna(value) else str(value)
 
@@ -771,7 +850,7 @@ with st.sidebar:
             "Dashboard",
             "Edit data customer",
             "Tambah customer baru",
-            "Import data branding",
+            "Eksport Data Branding (Excel) - Data SPKS",
             "Backup & Restore Supabase",
             "Backup ke Google Sheet",
         ],
@@ -792,78 +871,7 @@ if active_menu == "Dashboard":
         st.error(f"Perhatian: {expired} kontrak sudah berakhir.")
     if soon:
         st.warning(f"Pengingat: {soon} kontrak akan berakhir dalam 90 hari.")
-    st.subheader("Upload / Download Excel")
-    upload = st.file_uploader("Upload workbook Excel (.xlsx)", type=["xlsx"], key="workbook_upload")
-    if st.button("Import dan ganti data", type="primary", key="import_contract_workbook"):
-        if upload is None:
-            st.warning("Pilih file Excel terlebih dahulu.")
-        else:
-            try:
-                imported = read_workbook(upload)
-                problems = validate_data(imported)
-                if problems:
-                    st.error("\n".join(problems))
-                else:
-                    save_data(imported)
-                    st.session_state.contracts = imported
-                    st.session_state.load_warning = None
-                    st.success(f"Berhasil mengimpor {len(imported)} baris.")
-                    st.rerun()
-            except Exception as error:
-                st.error(f"Gagal mengimpor Excel: {error}")
 
-    with st.expander("Sinkronkan Ukuran & Brand Panel / Layar berdasarkan ID Customer"):
-        sync_upload = st.file_uploader(
-            "Upload file/sheet sumber Panel & Layar (.xlsx)",
-            type=["xlsx"],
-            key="sync_panel_screen_upload",
-        )
-        overwrite_sync = st.checkbox(
-            "Timpa nilai yang sudah terisi jika ID Customer cocok",
-            value=False,
-            key="overwrite_panel_screen_sync",
-        )
-        if st.button("Hubungkan ke Daftar customer", key="btn_sync_panel_screen"):
-            if sync_upload is None:
-                st.warning("Pilih file Excel sumber terlebih dahulu.")
-            else:
-                try:
-                    drp_source = read_drp_sheet(sync_upload)
-                    if drp_source is not None and not drp_source.empty:
-                        source_frame = drp_source
-                    else:
-                        sync_upload.seek(0)
-                        source_frame = read_workbook(sync_upload)
-                    merged_df, updated_cnt, missing_list = merge_panel_screen_by_id(
-                        st.session_state.contracts,
-                        source_frame,
-                        overwrite_existing=overwrite_sync,
-                    )
-                    save_data(merged_df)
-                    st.session_state.contracts = merged_df
-                    st.success(f"Sinkronisasi selesai: {updated_cnt} baris customer diperbarui.")
-                    if missing_list:
-                        st.info(f"{len(missing_list)} ID Customer tidak ditemukan di Daftar customer: {', '.join(missing_list[:15])}")
-                    st.rerun()
-                except Exception as error:
-                    st.error(f"Gagal sinkronisasi data panel/layar: {error}")
-
-    excel_col1, excel_col2 = st.columns(2)
-    excel_col1.download_button(
-        "Download data Excel",
-        data=excel_bytes(st.session_state.contracts),
-        file_name="Monitoring_Kontrak_Outlet.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-    )
-    excel_col2.download_button(
-        "Download template Excel",
-        data=excel_bytes(pd.DataFrame(columns=COLUMNS)),
-        file_name="Template_Monitoring_Kontrak_Outlet.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-    )
-    st.caption("Import akan mengganti seluruh data customer. Penyimpanan lokal Streamlit Cloud dapat bersifat sementara.")
     st.subheader("Filter data kontrak")
     f1, f2, f3, f4, f5 = st.columns(5)
     zones = ["Semua"] + sorted(contracts["Zona"].dropna().astype(str).unique().tolist())
@@ -935,7 +943,7 @@ if active_menu == "Dashboard":
             use_container_width=True,
         )
     if view.empty:
-        st.info("Belum ada data yang cocok. Gunakan bagian Upload / Download Excel pada dashboard untuk memasukkan data.")
+        st.info("Belum ada data yang cocok. Buka menu **Eksport Data Branding (Excel) - Data SPKS** untuk mengimpor data Excel.")
     else:
         selected_group = budget_group(selected_budget)
         if selected_budget == "Semua":
@@ -952,7 +960,7 @@ if active_menu == "Dashboard":
 elif active_menu == "Edit data customer":
     st.header("Edit data customer")
     if contracts.empty:
-        st.info("Data customer belum ada. Gunakan menu **Tambah customer baru** atau bagian Upload / Download Excel pada dashboard.")
+        st.info("Data customer belum ada. Gunakan menu **Tambah customer baru** atau **Eksport Data Branding (Excel) - Data SPKS**.")
     else:
         record_options = [
             f"{i} | {safe_text(row['ID Outlet']) or 'Tanpa ID'} | {safe_text(row['Nama Customer']) or 'Tanpa nama'}"
@@ -1006,8 +1014,11 @@ elif active_menu == "Tambah customer baru":
             except Exception as error:
                 st.error(f"Gagal menyimpan customer baru: {error}")
 
-elif active_menu == "Import data branding":
-    st.header("Import data outlet branding")
+elif active_menu == "Eksport Data Branding (Excel) - Data SPKS":
+    st.header("Eksport Data Branding (Excel) - Data SPKS")
+    render_excel_io_section(st.session_state.contracts)
+    st.divider()
+    st.subheader("Import data outlet branding (SPKS)")
     st.caption(
         "Data dengan ID Customer ganda dipilih berdasarkan Tanggal Pekerjaan Sampai terbaru. "
         "ID yang ditemukan memperbarui data customer; ID yang belum ada tidak ditambahkan ke tabel."
