@@ -815,6 +815,3 @@ else:
                 st.success(f"Backup berhasil: {row_count} baris tersimpan di Google Sheet.")
             except Exception as error:
                 st.error(f"Backup ke Google Sheet gagal: {error}")
-```[cite: 5]
-
-Jika masih muncul pesan peringatan atau error tertentu di layar (misalnya saat awal buka atau saat klik **Import dan ganti data**), salin pesan error/peringatannya ke sini agar langsung terlihat penyebab pastinya.
