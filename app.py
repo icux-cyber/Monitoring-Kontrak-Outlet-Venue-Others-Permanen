@@ -512,7 +512,11 @@ def backup_to_supabase(frame: pd.DataFrame, url: str, api_key: str, table: str) 
     headers = _supabase_headers(api_key)
     endpoint = f"{clean_url}/rest/v1/{clean_table}"
 
-    del_resp = requests.delete(f"{endpoint}?id=not.is.null", headers=headers, timeout=60)
+    del_resp = requests.delete(
+        f"{endpoint}?sheet_name=eq.{requests.utils.quote(SHEET_NAME)}",
+        headers=headers,
+        timeout=60,
+    )
     if del_resp.status_code >= 400:
         raise ValueError(f"Gagal membersihkan data lama di Supabase ({del_resp.status_code}): {del_resp.text}")
 
