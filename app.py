@@ -1014,11 +1014,11 @@ elif active_menu == "Tambah customer baru":
             except Exception as error:
                 st.error(f"Gagal menyimpan customer baru: {error}")
 
-elif active_menu == "Eksport Data Branding (Excel) - Data SPKS":
-    st.header("Eksport Data Branding (Excel) - Data SPKS")
+elif active_menu == "Eksport Data Branding (Excel) - Data SPKS (COSPKR06)":
+    st.header("Eksport Data Branding (Excel) - Data SPKS (COSPKR06)")
     render_excel_io_section(st.session_state.contracts)
     st.divider()
-    st.subheader("Import data outlet branding (SPKS)")
+    st.subheader("Upload Data Outlet Branding (SPKS - COSPKR06)")
     st.caption(
         "Data dengan ID Customer ganda dipilih berdasarkan Tanggal Pekerjaan Sampai terbaru. "
         "ID yang ditemukan memperbarui data customer; ID yang belum ada tidak ditambahkan ke tabel."
