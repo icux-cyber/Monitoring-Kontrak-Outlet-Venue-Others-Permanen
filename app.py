@@ -21,6 +21,13 @@ COLUMNS = [
     "Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Brand Panel",
     "Ukuran Layar", "Brand Layar",
 ]
+CONTENT_COLUMNS = [
+    "ID Outlet", "Nama Customer", "Alamat", "Zona", "Sektor", "Pos Budget",
+    "Kategori Outlet", "Kategori Pekerjaan", "Brand", "Nominal Kontrak",
+    "Periode Kontrak Awal", "Periode Kontrak Akhir",
+    "Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Brand Panel",
+    "Ukuran Layar", "Brand Layar",
+]
 ALIASES = {
     "ID Outlet": ("ID Outlet", "ID Customer", "Customer ID", "Kode Outlet", "Outlet ID"),
     "Nama Customer": ("Nama Customer", "Customer Name", "Customer", "Nama Outlet", "Nama Toko", "Outlet"),
@@ -164,21 +171,26 @@ def normalize_data(frame: pd.DataFrame) -> pd.DataFrame:
     for column in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
         normalized[column] = pd.to_datetime(normalized[column], errors="coerce", dayfirst=True).dt.tz_localize(None)
     normalized = normalized[COLUMNS]
-    has_data = normalized.notna().any(axis=1)
+    existing_content_cols = [col for col in CONTENT_COLUMNS if col in normalized.columns]
+    has_data = normalized[existing_content_cols].notna().any(axis=1)
     return normalized.loc[has_data.to_numpy(dtype=bool)].reset_index(drop=True)
 
 
 def read_workbook(source) -> pd.DataFrame:
-    for sheet, header in (("COSPKR06", 3), (0, 0), (SHEET_NAME, 0)):
+    last_error = None
+    for sheet, header in (("COSPKR06", 3), (SHEET_NAME, 0), (0, 0)):
         try:
             if hasattr(source, "seek"):
                 source.seek(0)
             result = normalize_data(pd.read_excel(source, sheet_name=sheet, header=header))
-            if not result.empty:
-                return result
-        except (ValueError, KeyError, OSError, ImportError):
+            has_identity = result["ID Outlet"].notna() | result["Nama Customer"].notna()
+            if not result.empty and has_identity.any():
+                return result.loc[has_identity.to_numpy(dtype=bool)].reset_index(drop=True)
+        except Exception as error:
+            last_error = error
             continue
-    raise ValueError("Tidak dapat membaca sheet/kolom data kontrak. Periksa file Excel dan nama sheet-nya.")
+    detail = f" ({last_error})" if last_error else ""
+    raise ValueError(f"Tidak dapat membaca sheet/kolom data kontrak{detail}. Periksa file Excel dan nama sheet-nya.")
 
 
 def read_branding_workbook(source) -> pd.DataFrame:
@@ -803,3 +815,6 @@ else:
                 st.success(f"Backup berhasil: {row_count} baris tersimpan di Google Sheet.")
             except Exception as error:
                 st.error(f"Backup ke Google Sheet gagal: {error}")
+```[cite: 5]
+
+Jika masih muncul pesan peringatan atau error tertentu di layar (misalnya saat awal buka atau saat klik **Import dan ganti data**), salin pesan error/peringatannya ke sini agar langsung terlihat penyebab pastinya.
