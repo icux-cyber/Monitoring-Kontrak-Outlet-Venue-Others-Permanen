@@ -912,8 +912,14 @@ if active_menu == "Dashboard":
     regular_view = view.loc[groups.eq("")]
     venue_view = view.loc[groups.eq("Venue")]
     other_permanent_view = view.loc[groups.eq("Others Permanen")]
-    download_columns = st.columns(3)
+    download_columns = st.columns(4)
     download_specs = [
+        (
+            "Download Daftar customer - All Kategori Excel",
+            view,
+            "Daftar_Customer_All_Kategori.xlsx",
+            "download_all_category_contracts",
+        ),
         (
             "Download Daftar customer - Retail Suplay kontrak Excel",
             regular_view,
