@@ -557,9 +557,9 @@ if active_menu == "Dashboard":
     selected_status = f5.selectbox("Status kontrak", statuses)
 
     f6, f7 = st.columns(2)
-    panel_sizes = ["Semua"] + sorted(contracts["Ukuran Panel Toko"].dropna().astype(str).unique().tolist())
+    sticker_sizes = ["Semua"] + sorted(contracts["Ukuran Sticker Panel Toko"].dropna().astype(str).unique().tolist())
     screen_sizes = ["Semua"] + sorted(contracts["Ukuran Layar"].dropna().astype(str).unique().tolist())
-    selected_panel_size = f6.selectbox("Ukuran Panel", panel_sizes)
+    selected_sticker_size = f6.selectbox("Ukuran Sticker Panel", sticker_sizes)
     selected_screen_size = f7.selectbox("Ukuran Layar", screen_sizes)
 
     view = contracts.copy()
@@ -573,8 +573,8 @@ if active_menu == "Dashboard":
         view = view[view["Kategori Pekerjaan"] == selected_job_category]
     if selected_status != "Semua":
         view = view[view["Status Kontrak"] == selected_status]
-    if selected_panel_size != "Semua":
-        view = view[view["Ukuran Panel Toko"] == selected_panel_size]
+    if selected_sticker_size != "Semua":
+        view = view[view["Ukuran Sticker Panel Toko"] == selected_sticker_size]
     if selected_screen_size != "Semua":
         view = view[view["Ukuran Layar"] == selected_screen_size]
     st.subheader("Hasil filter data kontrak")
