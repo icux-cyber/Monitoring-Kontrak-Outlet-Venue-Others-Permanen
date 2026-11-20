@@ -1201,7 +1201,7 @@ else:
                 )
                 st.success(f"Backup berhasil: {row_count} baris tersimpan di Google Sheet.")
             except Exception as error:
-                st.error(f"Backup ke Google Sheet gagal: {error}")]
+                st.error(f"Backup ke Google Sheet gagal: {error}")
 ALIASES = {
     "ID Outlet": ("ID Outlet", "ID Customer", "Customer ID", "Kode Outlet", "Outlet ID"),
     "Nama Customer": ("Nama Customer", "Customer Name", "Customer", "Nama Outlet", "Nama Toko", "Outlet"),
