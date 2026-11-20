@@ -113,7 +113,7 @@ def extract_sizes(value):
         flags=re.IGNORECASE,
     )
     if not matches:
-        return pd.NA
+        return text
     sizes = dict.fromkeys(f"{width} x {height} m" for width, height in matches)
     return ", ".join(sizes)
 
