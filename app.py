@@ -1054,7 +1054,7 @@ elif active_menu == "👥 Kelola Data Customer":
         "📑 Tambah Massal (Excel)",
     ])
 
-    # ------------------------------------------
+# ------------------------------------------
     # TAB 1: EDIT MULTIPLE DENGAN QUICK SEARCH
     # ------------------------------------------
     with tab_multi_edit:
@@ -1064,7 +1064,10 @@ elif active_menu == "👥 Kelola Data Customer":
             st.markdown("#### 🔍 Pencarian Instan & Edit Massal")
             st.caption("Cari beberapa outlet sekaligus, lalu edit langsung di tabel atau gunakan **Update Massal** untuk mengubah banyak baris dalam 1 klik.")
 
-            # Bar Pencarian Instan + Filter Zona & Status
+            # State untuk centang semua / batal centang pada hasil pencarian saat ini
+            if "multi_select_all_state" not in st.session_state:
+                st.session_state.multi_select_all_state = False
+
             qs_col1, qs_col2, qs_col3 = st.columns([2.2, 1, 1])
             multi_search = qs_col1.text_input(
                 "Quick Search (ID Outlet, Nama Customer, Alamat, Brand, atau Sektor)",
@@ -1084,7 +1087,6 @@ elif active_menu == "👥 Kelola Data Customer":
             ]
             multi_sel_status = qs_col3.selectbox("Filter Status", multi_statuses, key="multi_edit_status")
 
-            # Filter subset berdasarkan Quick Search
             filtered_multi = contracts.copy()
             if multi_search.strip():
                 q_multi = multi_search.strip().casefold()
@@ -1107,20 +1109,29 @@ elif active_menu == "👥 Kelola Data Customer":
             if filtered_multi.empty:
                 st.warning("Tidak ada customer yang cocok dengan kata kunci pencarian Anda.")
             else:
-                # Persiapkan DataFrame untuk Data Editor (gunakan index asli sebagai kunci sinkronisasi)
-                editor_df = filtered_multi[COLUMNS].copy()
-                editor_df.insert(0, "Pilih", False)
+                # Bar kontrol Centang All / Batal Centang di atas tabel
+                sel_info_col, btn_all_col, btn_none_col = st.columns([3.5, 1, 1])
+                sel_info_col.markdown("**Daftar Hasil Pencarian (Editable)**")
+                if btn_all_col.button("☑️ Centang Semua", use_container_width=True, key="btn_check_all_multi"):
+                    st.session_state.multi_select_all_state = True
+                    st.session_state.pop("multi_customer_data_editor", None)
+                    st.rerun()
+                if btn_none_col.button("⬜ Batal Centang", use_container_width=True, key="btn_uncheck_all_multi"):
+                    st.session_state.multi_select_all_state = False
+                    st.session_state.pop("multi_customer_data_editor", None)
+                    st.rerun()
 
-                # Konversi kolom teks ke object/str biasa agar st.data_editor dapat mengedit dengan mulus
+                editor_df = filtered_multi[COLUMNS].copy()
+                editor_df.insert(0, "Pilih", bool(st.session_state.multi_select_all_state))
+
                 for col in COLUMNS:
                     if col not in MATERIAL_COLUMNS and col not in ("Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir"):
                         editor_df[col] = editor_df[col].fillna("").astype(str)
                     elif col == "Nominal Kontrak":
                         editor_df[col] = pd.to_numeric(editor_df[col], errors="coerce").fillna(0.0)
 
-                # FITUR AKSI MASSAL (BULK UPDATE UNTUK BARIS TERCENTANG / SEMUA HASIL CARI)
                 with st.expander("🪄 Aksi Cepat Massal (Ubah Kolom Secara Serentak untuk Banyak Outlet)", expanded=False):
-                    st.caption("Centang kolom **Pilih** pada tabel di bawah terlebih dahulu, atau pilih opsi terapkan ke semua hasil pencarian.")
+                    st.caption("Klik **Centang Semua** di atas atau centang kolom **Pilih** pada baris tertentu, lalu terapkan perubahan.")
                     ba1, ba2, ba3, ba4 = st.columns([1.3, 1.5, 1.2, 1])
 
                     bulk_target_col = ba1.selectbox(
@@ -1153,7 +1164,12 @@ elif active_menu == "👥 Kelola Data Customer":
                     elif bulk_target_col == "Nominal Kontrak":
                         bulk_new_val = ba2.number_input("Nilai Nominal Baru (Rp)", min_value=0.0, step=100000.0, key="bulk_val_num")
                     elif bulk_target_col in MATERIAL_COLUMNS:
-                        bulk_new_val = ba2.selectbox("Status Centang Baru", [True, False], format_func=lambda x: "✅ Aktif / Terpasang" if x else "❌ Tidak Ada", key="bulk_val_bool")
+                        bulk_new_val = ba2.selectbox(
+                            "Status Centang Baru",
+                            [True, False],
+                            format_func=lambda x: "✅ Aktif / Terpasang" if x else "❌ Tidak Ada",
+                            key="bulk_val_bool",
+                        )
                     else:
                         bulk_new_val = ba2.text_input("Nilai Teks Baru", placeholder="Masukkan nilai baru...", key="bulk_val_text")
 
@@ -1165,7 +1181,6 @@ elif active_menu == "👥 Kelola Data Customer":
                     ba4.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
                     apply_bulk_clicked = ba4.button("Terapkan Massal", type="secondary", use_container_width=True, key="btn_apply_bulk")
 
-                # TAMPILKAN TABEL INTERAKTIF EDITABLE
                 edited_df = st.data_editor(
                     editor_df,
                     use_container_width=True,
@@ -1186,7 +1201,6 @@ elif active_menu == "👥 Kelola Data Customer":
                     },
                 )
 
-                # PROSES JIKA AKSI MASSAL DIKLIK
                 if apply_bulk_clicked:
                     if bulk_scope.startswith("Hanya"):
                         target_indices = edited_df.index[edited_df["Pilih"] == True].tolist()
@@ -1194,16 +1208,18 @@ elif active_menu == "👥 Kelola Data Customer":
                         target_indices = edited_df.index.tolist()
 
                     if not target_indices:
-                        st.warning("⚠️ Centang minimal 1 baris pada kolom **Pilih** terlebih dahulu (atau ubah Target Baris menjadi semua hasil pencarian).")
+                        st.warning("⚠️ Klik **Centang Semua** atau centang minimal 1 baris pada kolom **Pilih** terlebih dahulu.")
                     else:
                         full_updated = st.session_state.contracts[COLUMNS].copy()
-                        # Terapkan perubahan manual yang sudah diketik di tabel terlebih dahulu
                         for orig_idx in edited_df.index:
                             for col in COLUMNS:
                                 full_updated.at[orig_idx, col] = edited_df.at[orig_idx, col]
 
-                        # Terapkan nilai massal ke baris terpilih
-                        val_to_set = pd.Timestamp(bulk_new_val) if bulk_target_col in ("Periode Kontrak Awal", "Periode Kontrak Akhir") else bulk_new_val
+                        val_to_set = (
+                            pd.Timestamp(bulk_new_val)
+                            if bulk_target_col in ("Periode Kontrak Awal", "Periode Kontrak Akhir")
+                            else bulk_new_val
+                        )
                         for orig_idx in target_indices:
                             full_updated.at[orig_idx, bulk_target_col] = val_to_set
 
@@ -1214,17 +1230,17 @@ elif active_menu == "👥 Kelola Data Customer":
                             try:
                                 save_data(full_updated)
                                 st.session_state.contracts = normalize_data(full_updated)
+                                st.session_state.multi_select_all_state = False
                                 st.success(f"✅ Berhasil memperbarui kolom **{bulk_target_col}** untuk **{len(target_indices)}** customer sekaligus!")
                                 st.rerun()
                             except Exception as error:
                                 st.error(f"Gagal menyimpan pembaruan massal: {error}")
 
-                # BAR TOMBOL SIMPAN & HAPUS MULTIPLE
-                act_col1, act_col2, act_col3 = st.columns([2, 1.3, 1.3])
                 selected_rows_count = int(edited_df["Pilih"].sum())
-                act_col1.info(f"💡 Edit sel langsung pada tabel di atas, lalu klik **Simpan Semua Perubahan**. ({selected_rows_count} baris dicentang)")
+                act_col1, act_col2, act_col3 = st.columns([2, 1.3, 1.3])
+                act_col1.info(f"💡 Terpilih: **{selected_rows_count}** dari **{len(edited_df)}** baris pada hasil pencarian ini.")
 
-                if act_col2.button("💾 Simpan Semua Perubahan Tabel", type="primary", use_container_width=True, key="btn_save_multi_table"):
+                if act_col2.button("💾 Simpan Perubahan Tabel", type="primary", use_container_width=True, key="btn_save_multi_table"):
                     full_updated = st.session_state.contracts[COLUMNS].copy()
                     for orig_idx in edited_df.index:
                         for col in COLUMNS:
@@ -1237,16 +1253,23 @@ elif active_menu == "👥 Kelola Data Customer":
                         try:
                             save_data(full_updated)
                             st.session_state.contracts = normalize_data(full_updated)
+                            st.session_state.multi_select_all_state = False
                             st.success(f"✅ Perubahan pada {len(edited_df)} baris hasil pencarian berhasil disimpan!")
                             st.rerun()
                         except Exception as error:
                             st.error(f"Gagal menyimpan perubahan: {error}")
 
-                if act_col3.button(
-                    f"🗑️ Hapus Terpilih ({selected_rows_count})",
+                confirm_delete_all = act_col3.checkbox(
+                    "Konfirmasi hapus",
+                    value=False,
+                    disabled=(selected_rows_count == 0),
+                    key="confirm_delete_multi_cb",
+                )
+                if st.button(
+                    f"🗑️ Hapus Terpilih ({selected_rows_count} baris)",
                     type="secondary",
                     use_container_width=True,
-                    disabled=(selected_rows_count == 0),
+                    disabled=(selected_rows_count == 0 or not confirm_delete_all),
                     key="btn_delete_multi_selected",
                 ):
                     try:
@@ -1254,11 +1277,12 @@ elif active_menu == "👥 Kelola Data Customer":
                         remaining_df = st.session_state.contracts.drop(index=indices_to_drop).reset_index(drop=True)
                         save_data(remaining_df)
                         st.session_state.contracts = normalize_data(remaining_df)
+                        st.session_state.multi_select_all_state = False
                         st.success(f"✅ {len(indices_to_drop)} customer terpilih berhasil dihapus.")
                         st.rerun()
                     except Exception as error:
                         st.error(f"Gagal menghapus customer terpilih: {error}")
-
+                        
     # ------------------------------------------
     # TAB 2: EDIT SATUAN (FORM DETAIL)
     # ------------------------------------------
