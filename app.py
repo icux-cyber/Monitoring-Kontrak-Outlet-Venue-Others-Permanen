@@ -75,6 +75,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+
 # ==========================================
 # CUSTOM CSS UNTUK TAMPILAN MODERN
 # ==========================================
@@ -82,14 +83,11 @@ def inject_custom_css():
     st.markdown(
         """
         <style>
-        /* Latar belakang & tipografi utama */
         .block-container {
             padding-top: 1.5rem;
             padding-bottom: 2rem;
             max-width: 96%;
         }
-
-        /* Header Banner */
         .hero-header {
             background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%);
             padding: 1.5rem 2rem;
@@ -110,8 +108,6 @@ def inject_custom_css():
             font-size: 0.95rem;
             color: #cbd5e1;
         }
-
-        /* KPI Cards */
         .kpi-card {
             background-color: #ffffff;
             border: 1px solid #e2e8f0;
@@ -149,25 +145,10 @@ def inject_custom_css():
         .border-amber { border-left: 5px solid #f59e0b; }
         .border-rose { border-left: 5px solid #ef4444; }
 
-        /* Section Card */
-        .section-box {
-            background-color: #f8fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 12px;
-            padding: 1.2rem;
-            margin-bottom: 1rem;
-        }
-
-        /* Sidebar styling */
         section[data-testid="stSidebar"] {
             background-color: #f8fafc;
             border-right: 1px solid #e2e8f0;
         }
-        div[data-testid="stSidebarNav"] {
-            padding-top: 1rem;
-        }
-
-        /* Tab styling */
         .stTabs [data-baseweb="tab-list"] {
             gap: 8px;
             background-color: #f1f5f9;
@@ -184,7 +165,6 @@ def inject_custom_css():
             box-shadow: 0 1px 4px rgba(0,0,0,0.08);
         }
 
-        /* Dark mode compatibility */
         @media (prefers-color-scheme: dark) {
             .kpi-card {
                 background-color: #1e293b;
@@ -192,10 +172,6 @@ def inject_custom_css():
             }
             .kpi-value { color: #f8fafc; }
             .kpi-label, .kpi-sub { color: #94a3b8; }
-            .section-box {
-                background-color: #1e293b;
-                border-color: #334155;
-            }
         }
         </style>
         """,
@@ -708,7 +684,6 @@ def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
     for column in MATERIAL_COLUMNS:
         if column in display_frame:
             display_frame[column] = display_frame[column].map(lambda checked: "✅" if parse_tickmark(checked) else "—")
-    # Atur urutan kolom agar informasi paling krusial berada di depan
     priority_cols = [
         "Status Kontrak", "Sisa Hari", "ID Outlet", "Nama Customer",
         "Brand", "Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir",
@@ -925,7 +900,6 @@ if st.session_state.load_warning:
 # HALAMAN 1: DASHBOARD & MONITORING
 # ==========================================
 if active_menu == "📊 Dashboard & Monitoring":
-    # KPI CARDS
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(
@@ -974,7 +948,6 @@ if active_menu == "📊 Dashboard & Monitoring":
 
     st.markdown("")
 
-    # NOTIFIKASI RINGKAS
     if expired_count or critical_count:
         alert_col1, alert_col2 = st.columns(2)
         if expired_count:
@@ -1017,7 +990,6 @@ if active_menu == "📊 Dashboard & Monitoring":
         selected_sticker_size = f5.selectbox("Ukuran Sticker Panel", sticker_sizes)
         selected_screen_size = f6.selectbox("Ukuran Layar", screen_sizes)
 
-    # TERAPKAN FILTER
     view = contracts.copy()
     if search_query.strip():
         q = search_query.strip().casefold()
@@ -1046,7 +1018,6 @@ if active_menu == "📊 Dashboard & Monitoring":
 
     st.caption(f"Menampilkan **{len(view):,}** dari **{len(contracts):,}** total customer.".replace(",", "."))
 
-    # TAMPILAN TABEL BERBASIS TAB
     if view.empty:
         st.info("Tidak ada data yang cocok dengan kriteria pencarian/filter. Coba ubah filter atau impor data baru di menu **Import & Sinkronisasi**.")
     else:
@@ -1063,47 +1034,235 @@ if active_menu == "📊 Dashboard & Monitoring":
         ])
 
         with tab_all:
-            render_dashboard_table(
-                "Semua Data Customer Terfilter",
-                view,
-                "Daftar_Semua_Customer_Terfilter.xlsx",
-                "dl_all_filtered",
-            )
+            render_dashboard_table("Semua Data Customer Terfilter", view, "Daftar_Semua_Customer_Terfilter.xlsx", "dl_all_filtered")
         with tab_retail:
-            render_dashboard_table(
-                "Daftar Customer - Retail Supply",
-                regular_view,
-                "Daftar_Customer_Retail_Supply.xlsx",
-                "dl_retail_filtered",
-            )
+            render_dashboard_table("Daftar Customer - Retail Supply", regular_view, "Daftar_Customer_Retail_Supply.xlsx", "dl_retail_filtered")
         with tab_venue:
-            render_dashboard_table(
-                "Daftar Customer - Venue",
-                venue_view,
-                "Daftar_Customer_Venue.xlsx",
-                "dl_venue_filtered",
-            )
+            render_dashboard_table("Daftar Customer - Venue", venue_view, "Daftar_Customer_Venue.xlsx", "dl_venue_filtered")
         with tab_other:
-            render_dashboard_table(
-                "Daftar Customer - Others Permanen",
-                other_permanent_view,
-                "Daftar_Customer_Others_Permanen.xlsx",
-                "dl_other_filtered",
-            )
+            render_dashboard_table("Daftar Customer - Others Permanen", other_permanent_view, "Daftar_Customer_Others_Permanen.xlsx", "dl_other_filtered")
 
 
 # ==========================================
-# HALAMAN 2: KELOLA DATA CUSTOMER
+# HALAMAN 2: KELOLA DATA CUSTOMER (SINGLE & MULTIPLE)
 # ==========================================
 elif active_menu == "👥 Kelola Data Customer":
-    tab_edit, tab_add_manual, tab_add_batch = st.tabs([
-        "✏️ Edit / Hapus Customer",
+    tab_multi_edit, tab_single_edit, tab_add_manual, tab_add_batch = st.tabs([
+        "⚡ Edit Multiple (Quick Search)",
+        "✏️ Edit Satuan (Form)",
         "➕ Tambah Customer (Form)",
         "📑 Tambah Massal (Excel)",
     ])
 
-    # TAB 1: EDIT & HAPUS
-    with tab_edit:
+    # ------------------------------------------
+    # TAB 1: EDIT MULTIPLE DENGAN QUICK SEARCH
+    # ------------------------------------------
+    with tab_multi_edit:
+        if contracts.empty:
+            st.info("Belum ada data customer untuk diedit. Silakan tambah customer baru atau import Excel.")
+        else:
+            st.markdown("#### 🔍 Pencarian Instan & Edit Massal")
+            st.caption("Cari beberapa outlet sekaligus, lalu edit langsung di tabel atau gunakan **Update Massal** untuk mengubah banyak baris dalam 1 klik.")
+
+            # Bar Pencarian Instan + Filter Zona & Status
+            qs_col1, qs_col2, qs_col3 = st.columns([2.2, 1, 1])
+            multi_search = qs_col1.text_input(
+                "Quick Search (ID Outlet, Nama Customer, Alamat, Brand, atau Sektor)",
+                placeholder="Ketik kata kunci, misal: 'Warung', 'Surabaya', 'Super', atau kode ID...",
+                key="multi_edit_quick_search",
+            )
+            multi_zones = ["Semua Zona"] + sorted(contracts["Zona"].dropna().astype(str).unique().tolist())
+            multi_sel_zone = qs_col2.selectbox("Filter Zona", multi_zones, key="multi_edit_zone")
+
+            multi_statuses = [
+                "Semua Status",
+                "🔴 Expired",
+                "🟠 Kritis (≤ 30 hari)",
+                "🟡 Warning (31–90 hari)",
+                "🟢 Aktif (> 90 hari)",
+                "⚪ Data belum lengkap",
+            ]
+            multi_sel_status = qs_col3.selectbox("Filter Status", multi_statuses, key="multi_edit_status")
+
+            # Filter subset berdasarkan Quick Search
+            filtered_multi = contracts.copy()
+            if multi_search.strip():
+                q_multi = multi_search.strip().casefold()
+                mask_multi = (
+                    filtered_multi["ID Outlet"].fillna("").astype(str).str.casefold().str.contains(q_multi, regex=False)
+                    | filtered_multi["Nama Customer"].fillna("").astype(str).str.casefold().str.contains(q_multi, regex=False)
+                    | filtered_multi["Alamat"].fillna("").astype(str).str.casefold().str.contains(q_multi, regex=False)
+                    | filtered_multi["Brand"].fillna("").astype(str).str.casefold().str.contains(q_multi, regex=False)
+                    | filtered_multi["Sektor"].fillna("").astype(str).str.casefold().str.contains(q_multi, regex=False)
+                )
+                filtered_multi = filtered_multi[mask_multi]
+
+            if multi_sel_zone != "Semua Zona":
+                filtered_multi = filtered_multi[filtered_multi["Zona"] == multi_sel_zone]
+            if multi_sel_status != "Semua Status":
+                filtered_multi = filtered_multi[filtered_multi["Status Kontrak"] == multi_sel_status]
+
+            st.caption(f"Ditemukan **{len(filtered_multi):,}** baris customer sesuai pencarian.".replace(",", "."))
+
+            if filtered_multi.empty:
+                st.warning("Tidak ada customer yang cocok dengan kata kunci pencarian Anda.")
+            else:
+                # Persiapkan DataFrame untuk Data Editor (gunakan index asli sebagai kunci sinkronisasi)
+                editor_df = filtered_multi[COLUMNS].copy()
+                editor_df.insert(0, "Pilih", False)
+
+                # Konversi kolom teks ke object/str biasa agar st.data_editor dapat mengedit dengan mulus
+                for col in COLUMNS:
+                    if col not in MATERIAL_COLUMNS and col not in ("Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir"):
+                        editor_df[col] = editor_df[col].fillna("").astype(str)
+                    elif col == "Nominal Kontrak":
+                        editor_df[col] = pd.to_numeric(editor_df[col], errors="coerce").fillna(0.0)
+
+                # FITUR AKSI MASSAL (BULK UPDATE UNTUK BARIS TERCENTANG / SEMUA HASIL CARI)
+                with st.expander("🪄 Aksi Cepat Massal (Ubah Kolom Secara Serentak untuk Banyak Outlet)", expanded=False):
+                    st.caption("Centang kolom **Pilih** pada tabel di bawah terlebih dahulu, atau pilih opsi terapkan ke semua hasil pencarian.")
+                    ba1, ba2, ba3, ba4 = st.columns([1.3, 1.5, 1.2, 1])
+
+                    bulk_target_col = ba1.selectbox(
+                        "Kolom yang Diubah",
+                        [
+                            "Brand",
+                            "Nominal Kontrak",
+                            "Periode Kontrak Awal",
+                            "Periode Kontrak Akhir",
+                            "Zona",
+                            "Sektor",
+                            "Pos Budget",
+                            "Kategori Outlet",
+                            "Kategori Pekerjaan",
+                            "Brand Panel",
+                            "Ukuran Panel Toko",
+                            "Ukuran Sticker Panel Toko",
+                            "Brand Layar",
+                            "Ukuran Layar",
+                            "Panel Toko",
+                            "Showcase",
+                            "Layar Toko",
+                            "Shop Sign / Neon Box",
+                        ],
+                        key="bulk_target_col",
+                    )
+
+                    if bulk_target_col in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
+                        bulk_new_val = ba2.date_input("Nilai Baru", value=date.today(), key="bulk_val_date")
+                    elif bulk_target_col == "Nominal Kontrak":
+                        bulk_new_val = ba2.number_input("Nilai Nominal Baru (Rp)", min_value=0.0, step=100000.0, key="bulk_val_num")
+                    elif bulk_target_col in MATERIAL_COLUMNS:
+                        bulk_new_val = ba2.selectbox("Status Centang Baru", [True, False], format_func=lambda x: "✅ Aktif / Terpasang" if x else "❌ Tidak Ada", key="bulk_val_bool")
+                    else:
+                        bulk_new_val = ba2.text_input("Nilai Teks Baru", placeholder="Masukkan nilai baru...", key="bulk_val_text")
+
+                    bulk_scope = ba3.selectbox(
+                        "Target Baris",
+                        ["Hanya yang dicentang (Pilih)", f"Semua hasil pencarian ({len(filtered_multi)} baris)"],
+                        key="bulk_scope_choice",
+                    )
+                    ba4.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                    apply_bulk_clicked = ba4.button("Terapkan Massal", type="secondary", use_container_width=True, key="btn_apply_bulk")
+
+                # TAMPILKAN TABEL INTERAKTIF EDITABLE
+                edited_df = st.data_editor(
+                    editor_df,
+                    use_container_width=True,
+                    height=460,
+                    hide_index=True,
+                    key="multi_customer_data_editor",
+                    column_config={
+                        "Pilih": st.column_config.CheckboxColumn("Pilih", default=False, width="small"),
+                        "ID Outlet": st.column_config.TextColumn("ID Outlet", width="small"),
+                        "Nama Customer": st.column_config.TextColumn("Nama Customer", width="medium"),
+                        "Nominal Kontrak": st.column_config.NumberColumn("Nominal (Rp)", min_value=0, step=50000, format="Rp %d"),
+                        "Periode Kontrak Awal": st.column_config.DateColumn("Mulai Kontrak", format="DD/MM/YYYY"),
+                        "Periode Kontrak Akhir": st.column_config.DateColumn("Akhir Kontrak", format="DD/MM/YYYY"),
+                        "Panel Toko": st.column_config.CheckboxColumn("Panel", width="small"),
+                        "Showcase": st.column_config.CheckboxColumn("Showcase", width="small"),
+                        "Layar Toko": st.column_config.CheckboxColumn("Layar", width="small"),
+                        "Shop Sign / Neon Box": st.column_config.CheckboxColumn("Neon Box", width="small"),
+                    },
+                )
+
+                # PROSES JIKA AKSI MASSAL DIKLIK
+                if apply_bulk_clicked:
+                    if bulk_scope.startswith("Hanya"):
+                        target_indices = edited_df.index[edited_df["Pilih"] == True].tolist()
+                    else:
+                        target_indices = edited_df.index.tolist()
+
+                    if not target_indices:
+                        st.warning("⚠️ Centang minimal 1 baris pada kolom **Pilih** terlebih dahulu (atau ubah Target Baris menjadi semua hasil pencarian).")
+                    else:
+                        full_updated = st.session_state.contracts[COLUMNS].copy()
+                        # Terapkan perubahan manual yang sudah diketik di tabel terlebih dahulu
+                        for orig_idx in edited_df.index:
+                            for col in COLUMNS:
+                                full_updated.at[orig_idx, col] = edited_df.at[orig_idx, col]
+
+                        # Terapkan nilai massal ke baris terpilih
+                        val_to_set = pd.Timestamp(bulk_new_val) if bulk_target_col in ("Periode Kontrak Awal", "Periode Kontrak Akhir") else bulk_new_val
+                        for orig_idx in target_indices:
+                            full_updated.at[orig_idx, bulk_target_col] = val_to_set
+
+                        problems = validate_data(full_updated)
+                        if problems:
+                            st.error("\n".join(problems))
+                        else:
+                            try:
+                                save_data(full_updated)
+                                st.session_state.contracts = normalize_data(full_updated)
+                                st.success(f"✅ Berhasil memperbarui kolom **{bulk_target_col}** untuk **{len(target_indices)}** customer sekaligus!")
+                                st.rerun()
+                            except Exception as error:
+                                st.error(f"Gagal menyimpan pembaruan massal: {error}")
+
+                # BAR TOMBOL SIMPAN & HAPUS MULTIPLE
+                act_col1, act_col2, act_col3 = st.columns([2, 1.3, 1.3])
+                selected_rows_count = int(edited_df["Pilih"].sum())
+                act_col1.info(f"💡 Edit sel langsung pada tabel di atas, lalu klik **Simpan Semua Perubahan**. ({selected_rows_count} baris dicentang)")
+
+                if act_col2.button("💾 Simpan Semua Perubahan Tabel", type="primary", use_container_width=True, key="btn_save_multi_table"):
+                    full_updated = st.session_state.contracts[COLUMNS].copy()
+                    for orig_idx in edited_df.index:
+                        for col in COLUMNS:
+                            full_updated.at[orig_idx, col] = edited_df.at[orig_idx, col]
+
+                    problems = validate_data(full_updated)
+                    if problems:
+                        st.error("\n".join(problems))
+                    else:
+                        try:
+                            save_data(full_updated)
+                            st.session_state.contracts = normalize_data(full_updated)
+                            st.success(f"✅ Perubahan pada {len(edited_df)} baris hasil pencarian berhasil disimpan!")
+                            st.rerun()
+                        except Exception as error:
+                            st.error(f"Gagal menyimpan perubahan: {error}")
+
+                if act_col3.button(
+                    f"🗑️ Hapus Terpilih ({selected_rows_count})",
+                    type="secondary",
+                    use_container_width=True,
+                    disabled=(selected_rows_count == 0),
+                    key="btn_delete_multi_selected",
+                ):
+                    try:
+                        indices_to_drop = edited_df.index[edited_df["Pilih"] == True].tolist()
+                        remaining_df = st.session_state.contracts.drop(index=indices_to_drop).reset_index(drop=True)
+                        save_data(remaining_df)
+                        st.session_state.contracts = normalize_data(remaining_df)
+                        st.success(f"✅ {len(indices_to_drop)} customer terpilih berhasil dihapus.")
+                        st.rerun()
+                    except Exception as error:
+                        st.error(f"Gagal menghapus customer terpilih: {error}")
+
+    # ------------------------------------------
+    # TAB 2: EDIT SATUAN (FORM DETAIL)
+    # ------------------------------------------
+    with tab_single_edit:
         if contracts.empty:
             st.info("Belum ada data customer. Silakan tambah customer baru atau import Excel.")
         else:
@@ -1147,7 +1306,9 @@ elif active_menu == "👥 Kelola Data Customer":
                     except Exception as error:
                         st.error(f"Gagal menghapus customer: {error}")
 
-    # TAB 2: TAMBAH MANUAL
+    # ------------------------------------------
+    # TAB 3: TAMBAH MANUAL
+    # ------------------------------------------
     with tab_add_manual:
         blank_record = pd.Series({column: pd.NA for column in COLUMNS})
         submitted, new_record = render_outlet_form(blank_record, None)
@@ -1165,7 +1326,9 @@ elif active_menu == "👥 Kelola Data Customer":
                 except Exception as error:
                     st.error(f"Gagal menyimpan customer baru: {error}")
 
-    # TAB 3: TAMBAH MASSAL EXCEL
+    # ------------------------------------------
+    # TAB 4: TAMBAH MASSAL EXCEL
+    # ------------------------------------------
     with tab_add_batch:
         st.markdown("##### Langkah 1: Unduh Template Excel")
         sample_row = pd.DataFrame(
@@ -1273,7 +1436,6 @@ elif active_menu == "🔄 Import & Sinkronisasi":
         "📐 Sinkronisasi Ukuran Panel & Layar",
     ])
 
-    # TAB 1: REPLACE WORKBOOK UTAMA
     with tab_main_import:
         st.info("Fitur ini akan **mengganti seluruh database** dengan isi file Excel yang Anda unggah.")
         col_up, col_tpl = st.columns([2, 1])
@@ -1306,7 +1468,6 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                 use_container_width=True,
             )
 
-    # TAB 2: UPDATE SPKS BRANDING
     with tab_branding:
         st.caption(
             "Mengupdate data customer yang cocok berdasarkan **ID Customer** (mengambil tanggal pekerjaan paling baru jika terdapat duplikat)."
@@ -1363,7 +1524,6 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                 with st.expander(f"Lihat {len(missing_ids)} ID yang Tidak Ditemukan di Database"):
                     st.dataframe(missing_ids, use_container_width=True, hide_index=True)
 
-    # TAB 3: SINKRONISASI PANEL & LAYAR
     with tab_panel_sync:
         st.caption("Mencocokkan ukuran sticker panel, brand panel, dan ukuran layar dari sheet DRP berdasarkan ID Customer.")
         sync_upload = st.file_uploader("Upload File Sumber Panel & Layar (.xlsx)", type=["xlsx"], key="sync_panel_screen_upload")
@@ -1399,7 +1559,6 @@ elif active_menu == "🔄 Import & Sinkronisasi":
 elif active_menu == "☁️ Backup & Restore":
     col_sb, col_gs = st.columns(2)
 
-    # KOLOM SUPABASE
     with col_sb:
         with st.container(border=True):
             st.subheader("🗄️ Supabase Cloud")
@@ -1432,7 +1591,6 @@ elif active_menu == "☁️ Backup & Restore":
                     except Exception as error:
                         st.error(f"Gagal restore: {error}")
 
-    # KOLOM GOOGLE SHEETS
     with col_gs:
         with st.container(border=True):
             st.subheader("📗 Google Sheets")
