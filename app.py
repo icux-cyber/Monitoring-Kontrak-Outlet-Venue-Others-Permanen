@@ -180,6 +180,29 @@ def inject_custom_css():
 
 
 # ==========================================
+# FUNGSI RESET FILTER & STATE EDIT
+# ==========================================
+def reset_dashboard_filters() -> None:
+    st.session_state["dash_search_query"] = ""
+    st.session_state["dash_status"] = "Semua Status"
+    st.session_state["dash_zone"] = "Semua"
+    st.session_state["dash_sector"] = "Semua"
+    st.session_state["dash_budget"] = "Semua"
+    st.session_state["dash_job_cat"] = "Semua"
+    st.session_state["dash_sticker_size"] = "Semua"
+    st.session_state["dash_screen_size"] = "Semua"
+
+
+def reset_multi_edit_state() -> None:
+    st.session_state["multi_edit_quick_search"] = ""
+    st.session_state["multi_edit_zone"] = "Semua Zona"
+    st.session_state["multi_edit_status"] = "Semua Status"
+    st.session_state["multi_select_all_state"] = False
+    st.session_state["confirm_delete_multi_cb"] = False
+    st.session_state.pop("multi_customer_data_editor", None)
+
+
+# ==========================================
 # FUNGSI PEMROSESAN DATA (BACKEND LOGIC)
 # ==========================================
 def clean_headers(frame: pd.DataFrame) -> pd.DataFrame:
@@ -841,6 +864,9 @@ if "contracts" not in st.session_state:
     st.session_state.contracts = initial
     st.session_state.load_warning = warning
 
+if "multi_select_all_state" not in st.session_state:
+    st.session_state.multi_select_all_state = False
+
 contracts = add_contract_status(st.session_state.contracts)
 expired_count = int(contracts["Status Kontrak"].eq("🔴 Expired").sum())
 critical_count = int(contracts["Status Kontrak"].eq("🟠 Kritis (≤ 30 hari)").sum())
@@ -955,12 +981,23 @@ if active_menu == "📊 Dashboard & Monitoring":
         if critical_count:
             alert_col2.warning(f"⚠️ **{critical_count} kontrak** memasuki masa kritis (berakhir dalam ≤ 30 hari).")
 
-    # PENCARIAN & FILTER
-    st.markdown("### 🔍 Pencarian & Filter Data")
+    # PENCARIAN & FILTER + TOMBOL RESET
+    head_f, head_rst = st.columns([4, 1])
+    with head_f:
+        st.markdown("### 🔍 Pencarian & Filter Data")
+    with head_rst:
+        st.button(
+            "🔄 Reset Filter",
+            use_container_width=True,
+            key="btn_reset_dash_filter",
+            on_click=reset_dashboard_filters,
+        )
+
     search_col, status_col = st.columns([2, 1])
     search_query = search_col.text_input(
         "Cari cepat (ID Outlet, Nama Customer, Alamat, atau Brand)",
         placeholder="Ketik kata kunci pencarian...",
+        key="dash_search_query",
     )
     statuses = [
         "Semua Status",
@@ -970,7 +1007,7 @@ if active_menu == "📊 Dashboard & Monitoring":
         "🟢 Aktif (> 90 hari)",
         "⚪ Data belum lengkap",
     ]
-    selected_status = status_col.selectbox("Status Masa Berlaku", statuses)
+    selected_status = status_col.selectbox("Status Masa Berlaku", statuses, key="dash_status")
 
     with st.expander("🎛️ Filter Lanjutan (Zona, Sektor, Pos Budget, Ukuran Panel/Layar)", expanded=False):
         f1, f2, f3, f4 = st.columns(4)
@@ -979,16 +1016,16 @@ if active_menu == "📊 Dashboard & Monitoring":
         budget_positions = ["Semua"] + sorted(contracts["Pos Budget"].dropna().astype(str).unique().tolist())
         job_categories = ["Semua"] + sorted(contracts["Kategori Pekerjaan"].dropna().astype(str).unique().tolist())
 
-        selected_zone = f1.selectbox("Zona", zones)
-        selected_sector = f2.selectbox("Sektor", sectors)
-        selected_budget = f3.selectbox("Pos Budget", budget_positions)
-        selected_job_category = f4.selectbox("Kategori Pekerjaan", job_categories)
+        selected_zone = f1.selectbox("Zona", zones, key="dash_zone")
+        selected_sector = f2.selectbox("Sektor", sectors, key="dash_sector")
+        selected_budget = f3.selectbox("Pos Budget", budget_positions, key="dash_budget")
+        selected_job_category = f4.selectbox("Kategori Pekerjaan", job_categories, key="dash_job_cat")
 
         f5, f6 = st.columns(2)
         sticker_sizes = ["Semua"] + sorted(contracts["Ukuran Sticker Panel Toko"].dropna().astype(str).unique().tolist())
         screen_sizes = ["Semua"] + sorted(contracts["Ukuran Layar"].dropna().astype(str).unique().tolist())
-        selected_sticker_size = f5.selectbox("Ukuran Sticker Panel", sticker_sizes)
-        selected_screen_size = f6.selectbox("Ukuran Layar", screen_sizes)
+        selected_sticker_size = f5.selectbox("Ukuran Sticker Panel", sticker_sizes, key="dash_sticker_size")
+        selected_screen_size = f6.selectbox("Ukuran Layar", screen_sizes, key="dash_screen_size")
 
     view = contracts.copy()
     if search_query.strip():
@@ -1054,19 +1091,24 @@ elif active_menu == "👥 Kelola Data Customer":
         "📑 Tambah Massal (Excel)",
     ])
 
-# ------------------------------------------
+    # ------------------------------------------
     # TAB 1: EDIT MULTIPLE DENGAN QUICK SEARCH
     # ------------------------------------------
     with tab_multi_edit:
         if contracts.empty:
             st.info("Belum ada data customer untuk diedit. Silakan tambah customer baru atau import Excel.")
         else:
-            st.markdown("#### 🔍 Pencarian Instan & Edit Massal")
-            st.caption("Cari beberapa outlet sekaligus, lalu edit langsung di tabel atau gunakan **Update Massal** untuk mengubah banyak baris dalam 1 klik.")
-
-            # State untuk centang semua / batal centang pada hasil pencarian saat ini
-            if "multi_select_all_state" not in st.session_state:
-                st.session_state.multi_select_all_state = False
+            me_title_col, me_reset_col = st.columns([3.5, 1.5])
+            with me_title_col:
+                st.markdown("#### 🔍 Pencarian Instan & Edit Massal")
+                st.caption("Cari beberapa outlet sekaligus, lalu edit langsung di tabel atau gunakan **Update Massal** untuk mengubah banyak baris dalam 1 klik.")
+            with me_reset_col:
+                st.button(
+                    "🔄 Reset & Batalkan Edit",
+                    use_container_width=True,
+                    key="btn_reset_multi_edit",
+                    on_click=reset_multi_edit_state,
+                )
 
             qs_col1, qs_col2, qs_col3 = st.columns([2.2, 1, 1])
             multi_search = qs_col1.text_input(
@@ -1109,7 +1151,6 @@ elif active_menu == "👥 Kelola Data Customer":
             if filtered_multi.empty:
                 st.warning("Tidak ada customer yang cocok dengan kata kunci pencarian Anda.")
             else:
-                # Bar kontrol Centang All / Batal Centang di atas tabel
                 sel_info_col, btn_all_col, btn_none_col = st.columns([3.5, 1, 1])
                 sel_info_col.markdown("**Daftar Hasil Pencarian (Editable)**")
                 if btn_all_col.button("☑️ Centang Semua", use_container_width=True, key="btn_check_all_multi"):
@@ -1231,6 +1272,7 @@ elif active_menu == "👥 Kelola Data Customer":
                                 save_data(full_updated)
                                 st.session_state.contracts = normalize_data(full_updated)
                                 st.session_state.multi_select_all_state = False
+                                st.session_state.pop("multi_customer_data_editor", None)
                                 st.success(f"✅ Berhasil memperbarui kolom **{bulk_target_col}** untuk **{len(target_indices)}** customer sekaligus!")
                                 st.rerun()
                             except Exception as error:
@@ -1254,6 +1296,7 @@ elif active_menu == "👥 Kelola Data Customer":
                             save_data(full_updated)
                             st.session_state.contracts = normalize_data(full_updated)
                             st.session_state.multi_select_all_state = False
+                            st.session_state.pop("multi_customer_data_editor", None)
                             st.success(f"✅ Perubahan pada {len(edited_df)} baris hasil pencarian berhasil disimpan!")
                             st.rerun()
                         except Exception as error:
@@ -1278,11 +1321,13 @@ elif active_menu == "👥 Kelola Data Customer":
                         save_data(remaining_df)
                         st.session_state.contracts = normalize_data(remaining_df)
                         st.session_state.multi_select_all_state = False
+                        st.session_state["confirm_delete_multi_cb"] = False
+                        st.session_state.pop("multi_customer_data_editor", None)
                         st.success(f"✅ {len(indices_to_drop)} customer terpilih berhasil dihapus.")
                         st.rerun()
                     except Exception as error:
                         st.error(f"Gagal menghapus customer terpilih: {error}")
-                        
+
     # ------------------------------------------
     # TAB 2: EDIT SATUAN (FORM DETAIL)
     # ------------------------------------------
