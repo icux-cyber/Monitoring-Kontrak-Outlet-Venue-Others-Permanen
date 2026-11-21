@@ -10,10 +10,14 @@ import pandas as pd
 import requests
 import streamlit as st
 
+# ==========================================
+# KONFIGURASI HALAMAN & KONSTANTA
+# ==========================================
 APP_TITLE = "Monitoring Kontrak Outlet"
 DATA_FILE = Path("data") / "DRP & Outlet MCD - DSO Surabaya Barat.xlsx"
 SHEET_NAME = "Monitoring Kontrak Outlet"
 DRP_SHEET_NAME = "Pemesanan Layar DRP"
+
 MATERIAL_COLUMNS = ["Panel Toko", "Showcase", "Layar Toko", "Shop Sign / Neon Box"]
 SYNC_PANEL_SCREEN_COLUMNS = [
     "Ukuran Sticker Panel Toko",
@@ -64,9 +68,144 @@ ALIASES = {
     "Brand Layar": ("Brand Layar", "Brand Planning - Layar DRP", "Merek Layar"),
 }
 
-st.set_page_config(page_title=APP_TITLE, page_icon="📊", layout="wide")
+st.set_page_config(
+    page_title=APP_TITLE,
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ==========================================
+# CUSTOM CSS UNTUK TAMPILAN MODERN
+# ==========================================
+def inject_custom_css():
+    st.markdown(
+        """
+        <style>
+        /* Latar belakang & tipografi utama */
+        .block-container {
+            padding-top: 1.5rem;
+            padding-bottom: 2rem;
+            max-width: 96%;
+        }
+
+        /* Header Banner */
+        .hero-header {
+            background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%);
+            padding: 1.5rem 2rem;
+            border-radius: 16px;
+            color: white;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12);
+        }
+        .hero-header h1 {
+            margin: 0;
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: #ffffff;
+            letter-spacing: -0.02em;
+        }
+        .hero-header p {
+            margin: 0.35rem 0 0 0;
+            font-size: 0.95rem;
+            color: #cbd5e1;
+        }
+
+        /* KPI Cards */
+        .kpi-card {
+            background-color: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 14px;
+            padding: 1.15rem 1.35rem;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+            height: 100%;
+        }
+        .kpi-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+        }
+        .kpi-label {
+            font-size: 0.82rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #64748b;
+            margin-bottom: 0.35rem;
+        }
+        .kpi-value {
+            font-size: 1.65rem;
+            font-weight: 700;
+            color: #0f172a;
+            line-height: 1.2;
+        }
+        .kpi-sub {
+            font-size: 0.78rem;
+            color: #64748b;
+            margin-top: 0.35rem;
+        }
+        .border-blue { border-left: 5px solid #2563eb; }
+        .border-emerald { border-left: 5px solid #10b981; }
+        .border-amber { border-left: 5px solid #f59e0b; }
+        .border-rose { border-left: 5px solid #ef4444; }
+
+        /* Section Card */
+        .section-box {
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 1.2rem;
+            margin-bottom: 1rem;
+        }
+
+        /* Sidebar styling */
+        section[data-testid="stSidebar"] {
+            background-color: #f8fafc;
+            border-right: 1px solid #e2e8f0;
+        }
+        div[data-testid="stSidebarNav"] {
+            padding-top: 1rem;
+        }
+
+        /* Tab styling */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 8px;
+            background-color: #f1f5f9;
+            padding: 6px;
+            border-radius: 12px;
+        }
+        .stTabs [data-baseweb="tab"] {
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-weight: 600;
+        }
+        .stTabs [aria-selected="true"] {
+            background-color: #ffffff !important;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+        }
+
+        /* Dark mode compatibility */
+        @media (prefers-color-scheme: dark) {
+            .kpi-card {
+                background-color: #1e293b;
+                border-color: #334155;
+            }
+            .kpi-value { color: #f8fafc; }
+            .kpi-label, .kpi-sub { color: #94a3b8; }
+            .section-box {
+                background-color: #1e293b;
+                border-color: #334155;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
+# ==========================================
+# FUNGSI PEMROSESAN DATA (BACKEND LOGIC)
+# ==========================================
 def clean_headers(frame: pd.DataFrame) -> pd.DataFrame:
     frame = frame.copy()
     frame.columns = [str(column).strip() for column in frame.columns]
@@ -421,14 +560,14 @@ def add_contract_status(frame: pd.DataFrame, today: date | None = None) -> pd.Da
 
     def status(days):
         if pd.isna(days):
-            return "Data belum lengkap"
+            return "⚪ Data belum lengkap"
         if days < 0:
-            return "Expired"
+            return "🔴 Expired"
         if days <= 30:
-            return "Kritis (≤ 30 hari)"
+            return "🟠 Kritis (≤ 30 hari)"
         if days <= 90:
-            return "Warning (31–90 hari)"
-        return "Aktif (> 90 hari)"
+            return "🟡 Warning (31–90 hari)"
+        return "🟢 Aktif (> 90 hari)"
 
     result["Status Kontrak"] = remaining.map(status)
     return result
@@ -559,7 +698,7 @@ def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
     display_frame = frame.copy()
     if "Nominal Kontrak" in display_frame:
         display_frame["Nominal Kontrak"] = display_frame["Nominal Kontrak"].map(
-            lambda value: "" if pd.isna(value) else f"{float(value):,.0f}".replace(",", ".")
+            lambda value: "" if pd.isna(value) else f"Rp {float(value):,.0f}".replace(",", ".")
         )
     for column in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
         if column in display_frame:
@@ -568,8 +707,16 @@ def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
             )
     for column in MATERIAL_COLUMNS:
         if column in display_frame:
-            display_frame[column] = display_frame[column].map(lambda checked: "✓" if parse_tickmark(checked) else "")
-    return display_frame
+            display_frame[column] = display_frame[column].map(lambda checked: "✅" if parse_tickmark(checked) else "—")
+    # Atur urutan kolom agar informasi paling krusial berada di depan
+    priority_cols = [
+        "Status Kontrak", "Sisa Hari", "ID Outlet", "Nama Customer",
+        "Brand", "Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir",
+        "Zona", "Sektor", "Pos Budget", "Kategori Outlet", "Kategori Pekerjaan",
+    ]
+    existing_priority = [c for c in priority_cols if c in display_frame.columns]
+    remaining_cols = [c for c in display_frame.columns if c not in existing_priority]
+    return display_frame[existing_priority + remaining_cols]
 
 
 def budget_group(value) -> str:
@@ -583,14 +730,38 @@ def budget_group(value) -> str:
     return ""
 
 
-def render_dashboard_table(title: str, frame: pd.DataFrame) -> None:
-    st.subheader(title)
+def render_dashboard_table(title: str, frame: pd.DataFrame, download_filename: str, dl_key: str) -> None:
+    col_head, col_dl = st.columns([3, 1])
+    with col_head:
+        st.markdown(f"#### {title} ({len(frame):,} outlet)".replace(",", "."))
+    with col_dl:
+        st.download_button(
+            "📥 Export Excel",
+            data=excel_bytes(frame.sort_values("Sisa Hari", na_position="last")),
+            file_name=download_filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=dl_key,
+            use_container_width=True,
+        )
+
     if frame.empty:
-        st.info(f"Tidak ada customer di tabel {title.lower()} yang sesuai dengan filter.")
+        st.info(f"Tidak ada data customer pada kategori **{title}** yang sesuai dengan filter saat ini.")
         return
-    st.metric("Jumlah customer pada tabel", f"{len(frame):,}".replace(",", "."))
+
     sorted_frame = frame.sort_values("Sisa Hari", na_position="last")
-    st.dataframe(format_outlet_table(sorted_frame), use_container_width=True, hide_index=True)
+    st.dataframe(
+        format_outlet_table(sorted_frame),
+        use_container_width=True,
+        hide_index=True,
+        height=440,
+        column_config={
+            "Status Kontrak": st.column_config.TextColumn("Status", width="medium"),
+            "Sisa Hari": st.column_config.NumberColumn("Sisa Hari", format="%d hr", width="small"),
+            "ID Outlet": st.column_config.TextColumn("ID Outlet", width="small"),
+            "Nama Customer": st.column_config.TextColumn("Nama Customer", width="large"),
+            "Nominal Kontrak": st.column_config.TextColumn("Nominal Kontrak", width="medium"),
+        },
+    )
 
 
 def save_data(frame: pd.DataFrame) -> None:
@@ -612,45 +783,56 @@ def safe_date(value):
 
 def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool, dict]:
     suffix = "new" if row_index is None else f"row_{row_index}"
-    with st.form(f"outlet_form_{suffix}"):
-        st.subheader("Data customer dan kontrak")
-        left, right = st.columns(2)
-        with left:
-            outlet_id = st.text_input("ID Outlet", value=safe_text(current["ID Outlet"]), key=f"id_{suffix}")
-            customer_name = st.text_input("Nama Customer", value=safe_text(current["Nama Customer"]), key=f"name_{suffix}")
-            address = st.text_area("Alamat", value=safe_text(current["Alamat"]), key=f"address_{suffix}")
-            zone = st.text_input("Zona", value=safe_text(current["Zona"]), key=f"zone_{suffix}")
-            sector = st.text_input("Sektor", value=safe_text(current["Sektor"]), key=f"sector_{suffix}")
-            budget_pos = st.text_input("Pos Budget", value=safe_text(current["Pos Budget"]), key=f"budget_{suffix}")
-            outlet_category = st.text_input("Kategori Outlet", value=safe_text(current["Kategori Outlet"]), key=f"outlet_category_{suffix}")
-            job_category = st.text_input("Kategori Pekerjaan", value=safe_text(current["Kategori Pekerjaan"]), key=f"job_category_{suffix}")
-        with right:
-            brand = st.text_input("Brand", value=safe_text(current["Brand"]), key=f"brand_{suffix}")
-            parsed_amount = parse_amount(current["Nominal Kontrak"])
-            amount = st.number_input(
-                "Nominal Kontrak (Rp)",
-                min_value=0.0,
-                step=100000.0,
-                value=0.0 if pd.isna(parsed_amount) else float(parsed_amount),
-                key=f"amount_{suffix}",
-            )
-            contract_start = st.date_input("Periode Kontrak Awal", value=safe_date(current["Periode Kontrak Awal"]), key=f"start_{suffix}")
-            contract_end = st.date_input("Periode Kontrak Akhir", value=safe_date(current["Periode Kontrak Akhir"]), key=f"end_{suffix}")
-        st.markdown("**Materi kontrak**")
+    with st.form(f"outlet_form_{suffix}", border=True):
+        st.markdown("##### 1. Identitas & Lokasi Outlet")
+        c1, c2, c3 = st.columns([1, 2, 1])
+        outlet_id = c1.text_input("ID Outlet *", value=safe_text(current["ID Outlet"]), placeholder="Contoh: 501X1234", key=f"id_{suffix}")
+        customer_name = c2.text_input("Nama Customer *", value=safe_text(current["Nama Customer"]), placeholder="Nama Toko / Outlet", key=f"name_{suffix}")
+        outlet_category = c3.text_input("Kategori Outlet", value=safe_text(current["Kategori Outlet"]), placeholder="Warung / Minimarket", key=f"outlet_category_{suffix}")
+
+        address = st.text_input("Alamat Lengkap", value=safe_text(current["Alamat"]), placeholder="Jl. Raya...", key=f"address_{suffix}")
+
+        z1, z2, z3, z4 = st.columns(4)
+        zone = z1.text_input("Zona", value=safe_text(current["Zona"]), key=f"zone_{suffix}")
+        sector = z2.text_input("Sektor", value=safe_text(current["Sektor"]), key=f"sector_{suffix}")
+        budget_pos = z3.text_input("Pos Budget", value=safe_text(current["Pos Budget"]), key=f"budget_{suffix}")
+        job_category = z4.text_input("Kategori Pekerjaan", value=safe_text(current["Kategori Pekerjaan"]), key=f"job_category_{suffix}")
+
+        st.divider()
+        st.markdown("##### 2. Detail Kontrak & Nilai")
+        k1, k2, k3, k4 = st.columns(4)
+        brand = k1.text_input("Brand Utama", value=safe_text(current["Brand"]), key=f"brand_{suffix}")
+        parsed_amount = parse_amount(current["Nominal Kontrak"])
+        amount = k2.number_input(
+            "Nominal Kontrak (Rp)",
+            min_value=0.0,
+            step=100000.0,
+            value=0.0 if pd.isna(parsed_amount) else float(parsed_amount),
+            key=f"amount_{suffix}",
+        )
+        contract_start = k3.date_input("Tanggal Mulai", value=safe_date(current["Periode Kontrak Awal"]), key=f"start_{suffix}")
+        contract_end = k4.date_input("Tanggal Berakhir", value=safe_date(current["Periode Kontrak Akhir"]), key=f"end_{suffix}")
+
+        st.divider()
+        st.markdown("##### 3. Materi Promosi & Spesifikasi Ukuran")
         material_cols = st.columns(4)
         material_values = {
             column: material_cols[index].checkbox(column, value=parse_tickmark(current[column]), key=f"material_{index}_{suffix}")
             for index, column in enumerate(MATERIAL_COLUMNS)
         }
-        st.markdown("**Detail panel dan layar**")
-        panel_col1, panel_col2, panel_col3 = st.columns(3)
-        panel_size = panel_col1.text_input("Ukuran Panel Toko", value=safe_text(current["Ukuran Panel Toko"]), key=f"panel_size_{suffix}")
-        sticker_size = panel_col2.text_input("Ukuran Sticker Panel Toko", value=safe_text(current["Ukuran Sticker Panel Toko"]), key=f"sticker_size_{suffix}")
-        panel_brand = panel_col3.text_input("Brand Panel", value=safe_text(current["Brand Panel"]), key=f"panel_brand_{suffix}")
-        screen_col1, screen_col2 = st.columns(2)
-        screen_size = screen_col1.text_input("Ukuran Layar", value=safe_text(current["Ukuran Layar"]), key=f"screen_size_{suffix}")
-        screen_brand = screen_col2.text_input("Brand Layar", value=safe_text(current["Brand Layar"]), key=f"screen_brand_{suffix}")
-        submitted = st.form_submit_button("Simpan data customer", type="primary")
+
+        p1, p2, p3 = st.columns(3)
+        panel_size = p1.text_input("Ukuran Panel Toko", value=safe_text(current["Ukuran Panel Toko"]), placeholder="1 x 3 m", key=f"panel_size_{suffix}")
+        sticker_size = p2.text_input("Ukuran Sticker Panel", value=safe_text(current["Ukuran Sticker Panel Toko"]), placeholder="1 x 2 m", key=f"sticker_size_{suffix}")
+        panel_brand = p3.text_input("Brand Panel", value=safe_text(current["Brand Panel"]), key=f"panel_brand_{suffix}")
+
+        s1, s2 = st.columns(2)
+        screen_size = s1.text_input("Ukuran Layar", value=safe_text(current["Ukuran Layar"]), placeholder="2 x 3 m", key=f"screen_size_{suffix}")
+        screen_brand = s2.text_input("Brand Layar", value=safe_text(current["Brand Layar"]), key=f"screen_brand_{suffix}")
+
+        st.markdown("")
+        submitted = st.form_submit_button("💾 Simpan Data Customer", type="primary", use_container_width=True)
+
     values = {
         "ID Outlet": outlet_id.strip() or pd.NA,
         "Nama Customer": customer_name.strip() or pd.NA,
@@ -674,136 +856,181 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool,
     return submitted, values
 
 
-st.title("📊 Monitoring Kontrak Outlet")
-st.caption("Pantau data customer dan kontrak, lihat peringatan masa berlaku, serta kelola data melalui form dan Excel.")
+# ==========================================
+# INISIALISASI STATE & LAYOUT UTAMA
+# ==========================================
+inject_custom_css()
+
 if "contracts" not in st.session_state:
     initial, warning = load_initial_data()
     st.session_state.contracts = initial
     st.session_state.load_warning = warning
-if st.session_state.load_warning:
-    st.warning(st.session_state.load_warning)
 
+contracts = add_contract_status(st.session_state.contracts)
+expired_count = int(contracts["Status Kontrak"].eq("🔴 Expired").sum())
+critical_count = int(contracts["Status Kontrak"].eq("🟠 Kritis (≤ 30 hari)").sum())
+warning_count = int(contracts["Status Kontrak"].eq("🟡 Warning (31–90 hari)").sum())
+soon_count = critical_count + warning_count
+total_value = pd.to_numeric(contracts["Nominal Kontrak"], errors="coerce").sum()
+
+# SIDEBAR NAVIGASI
 with st.sidebar:
-    st.header("Menu")
+    st.markdown("### 📊 DSO Surabaya Barat")
+    st.caption("Sistem Monitoring Kontrak Outlet")
+    st.divider()
+
     active_menu = st.radio(
-        "Pilih halaman",
+        "Navigasi Utama",
         [
-            "Dashboard",
-            "Edit data customer",
-            "Tambah customer baru",
-            "Import data branding",
-            "Backup & Restore Supabase",
-            "Backup ke Google Sheet",
+            "📊 Dashboard & Monitoring",
+            "👥 Kelola Data Customer",
+            "🔄 Import & Sinkronisasi",
+            "☁️ Backup & Restore",
         ],
+        label_visibility="collapsed",
         key="main_menu",
     )
 
-contracts = add_contract_status(st.session_state.contracts)
-if active_menu == "Dashboard":
-    expired = int(contracts["Status Kontrak"].eq("Expired").sum())
-    soon = int(contracts["Status Kontrak"].isin(["Kritis (≤ 30 hari)", "Warning (31–90 hari)"]).sum())
-    total_value = pd.to_numeric(contracts["Nominal Kontrak"], errors="coerce").sum()
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Jumlah customer", f"{len(contracts):,}".replace(",", "."))
-    m2.metric("Total nominal kontrak", f"Rp {total_value:,.0f}".replace(",", "."))
-    m3.metric("Akan berakhir ≤ 90 hari", soon)
-    m4.metric("Sudah berakhir", expired)
-    if expired:
-        st.error(f"Perhatian: {expired} kontrak sudah berakhir.")
-    if soon:
-        st.warning(f"Pengingat: {soon} kontrak akan berakhir dalam 90 hari.")
-    st.subheader("Upload / Download Excel")
-    upload = st.file_uploader("Upload workbook Excel (.xlsx)", type=["xlsx"], key="workbook_upload")
-    if st.button("Import dan ganti data", type="primary", key="import_contract_workbook"):
-        if upload is None:
-            st.warning("Pilih file Excel terlebih dahulu.")
-        else:
-            try:
-                imported = read_workbook(upload)
-                problems = validate_data(imported)
-                if problems:
-                    st.error("\n".join(problems))
-                else:
-                    save_data(imported)
-                    st.session_state.contracts = imported
-                    st.session_state.load_warning = None
-                    st.success(f"Berhasil mengimpor {len(imported)} baris.")
-                    st.rerun()
-            except Exception as error:
-                st.error(f"Gagal mengimpor Excel: {error}")
+    st.divider()
+    st.markdown("##### Ringkasan Cepat")
+    st.write(f"• **Total Outlet:** `{len(contracts):,}`".replace(",", "."))
+    st.write(f"• **Kritis (≤30 hr):** `{critical_count}`")
+    st.write(f"• **Expired:** `{expired_count}`")
 
-    with st.expander("Sinkronkan Ukuran & Brand Panel / Layar berdasarkan ID Customer"):
-        sync_upload = st.file_uploader(
-            "Upload file/sheet sumber Panel & Layar (.xlsx)",
-            type=["xlsx"],
-            key="sync_panel_screen_upload",
-        )
-        overwrite_sync = st.checkbox(
-            "Timpa nilai yang sudah terisi jika ID Customer cocok",
-            value=False,
-            key="overwrite_panel_screen_sync",
-        )
-        if st.button("Hubungkan ke Daftar customer", key="btn_sync_panel_screen"):
-            if sync_upload is None:
-                st.warning("Pilih file Excel sumber terlebih dahulu.")
-            else:
-                try:
-                    drp_source = read_drp_sheet(sync_upload)
-                    if drp_source is not None and not drp_source.empty:
-                        source_frame = drp_source
-                    else:
-                        sync_upload.seek(0)
-                        source_frame = read_workbook(sync_upload)
-                    merged_df, updated_cnt, missing_list = merge_panel_screen_by_id(
-                        st.session_state.contracts,
-                        source_frame,
-                        overwrite_existing=overwrite_sync,
-                    )
-                    save_data(merged_df)
-                    st.session_state.contracts = merged_df
-                    st.success(f"Sinkronisasi selesai: {updated_cnt} baris customer diperbarui.")
-                    if missing_list:
-                        st.info(f"{len(missing_list)} ID Customer tidak ditemukan di Daftar customer: {', '.join(missing_list[:15])}")
-                    st.rerun()
-                except Exception as error:
-                    st.error(f"Gagal sinkronisasi data panel/layar: {error}")
-
-    excel_col1, excel_col2 = st.columns(2)
-    excel_col1.download_button(
-        "Download data Excel",
+    st.divider()
+    st.download_button(
+        "⬇️ Download Semua Data (.xlsx)",
         data=excel_bytes(st.session_state.contracts),
         file_name="Monitoring_Kontrak_Outlet.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
-    excel_col2.download_button(
-        "Download template Excel",
-        data=excel_bytes(pd.DataFrame(columns=COLUMNS)),
-        file_name="Template_Monitoring_Kontrak_Outlet.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
+
+# HEADER BANNER
+st.markdown(
+    """
+    <div class="hero-header">
+        <h1>📊 Monitoring Kontrak Outlet</h1>
+        <p>Pantau masa berlaku kontrak, kelola database outlet, dan sinkronisasi data branding secara terpusat.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+if st.session_state.load_warning:
+    st.warning(st.session_state.load_warning)
+
+
+# ==========================================
+# HALAMAN 1: DASHBOARD & MONITORING
+# ==========================================
+if active_menu == "📊 Dashboard & Monitoring":
+    # KPI CARDS
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(
+            f"""
+            <div class="kpi-card border-blue">
+                <div class="kpi-label">Total Customer</div>
+                <div class="kpi-value">{len(contracts):,}</div>
+                <div class="kpi-sub">Outlet terdaftar aktif</div>
+            </div>
+            """.replace(",", "."),
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown(
+            f"""
+            <div class="kpi-card border-emerald">
+                <div class="kpi-label">Total Nilai Kontrak</div>
+                <div class="kpi-value">Rp {total_value/1_000_000:,.1f} Jt</div>
+                <div class="kpi-sub">Rp {total_value:,.0f}</div>
+            </div>
+            """.replace(",", "."),
+            unsafe_allow_html=True,
+        )
+    with c3:
+        st.markdown(
+            f"""
+            <div class="kpi-card border-amber">
+                <div class="kpi-label">Akan Berakhir (≤ 90 Hari)</div>
+                <div class="kpi-value">{soon_count}</div>
+                <div class="kpi-sub">{critical_count} kritis (≤30 hr) • {warning_count} warning</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with c4:
+        st.markdown(
+            f"""
+            <div class="kpi-card border-rose">
+                <div class="kpi-label">Sudah Expired</div>
+                <div class="kpi-value">{expired_count}</div>
+                <div class="kpi-sub">Perlu tindak lanjut perpanjangan</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("")
+
+    # NOTIFIKASI RINGKAS
+    if expired_count or critical_count:
+        alert_col1, alert_col2 = st.columns(2)
+        if expired_count:
+            alert_col1.error(f"🚨 **{expired_count} kontrak** sudah melewati masa berlaku (Expired).")
+        if critical_count:
+            alert_col2.warning(f"⚠️ **{critical_count} kontrak** memasuki masa kritis (berakhir dalam ≤ 30 hari).")
+
+    # PENCARIAN & FILTER
+    st.markdown("### 🔍 Pencarian & Filter Data")
+    search_col, status_col = st.columns([2, 1])
+    search_query = search_col.text_input(
+        "Cari cepat (ID Outlet, Nama Customer, Alamat, atau Brand)",
+        placeholder="Ketik kata kunci pencarian...",
     )
-    st.caption("Import akan mengganti seluruh data customer. Penyimpanan lokal Streamlit Cloud dapat bersifat sementara.")
-    st.subheader("Filter data kontrak")
-    f1, f2, f3, f4, f5 = st.columns(5)
-    zones = ["Semua"] + sorted(contracts["Zona"].dropna().astype(str).unique().tolist())
-    sectors = ["Semua"] + sorted(contracts["Sektor"].dropna().astype(str).unique().tolist())
-    budget_positions = ["Semua"] + sorted(contracts["Pos Budget"].dropna().astype(str).unique().tolist())
-    job_categories = ["Semua"] + sorted(contracts["Kategori Pekerjaan"].dropna().astype(str).unique().tolist())
-    statuses = ["Semua", "Expired", "Kritis (≤ 30 hari)", "Warning (31–90 hari)", "Aktif (> 90 hari)", "Data belum lengkap"]
-    selected_zone = f1.selectbox("Zona", zones)
-    selected_sector = f2.selectbox("Sektor", sectors)
-    selected_budget = f3.selectbox("Pos Budget", budget_positions)
-    selected_job_category = f4.selectbox("Kategori Pekerjaan", job_categories)
-    selected_status = f5.selectbox("Status kontrak", statuses)
+    statuses = [
+        "Semua Status",
+        "🔴 Expired",
+        "🟠 Kritis (≤ 30 hari)",
+        "🟡 Warning (31–90 hari)",
+        "🟢 Aktif (> 90 hari)",
+        "⚪ Data belum lengkap",
+    ]
+    selected_status = status_col.selectbox("Status Masa Berlaku", statuses)
 
-    f6, f7 = st.columns(2)
-    sticker_sizes = ["Semua"] + sorted(contracts["Ukuran Sticker Panel Toko"].dropna().astype(str).unique().tolist())
-    screen_sizes = ["Semua"] + sorted(contracts["Ukuran Layar"].dropna().astype(str).unique().tolist())
-    selected_sticker_size = f6.selectbox("Ukuran Sticker Panel", sticker_sizes)
-    selected_screen_size = f7.selectbox("Ukuran Layar", screen_sizes)
+    with st.expander("🎛️ Filter Lanjutan (Zona, Sektor, Pos Budget, Ukuran Panel/Layar)", expanded=False):
+        f1, f2, f3, f4 = st.columns(4)
+        zones = ["Semua"] + sorted(contracts["Zona"].dropna().astype(str).unique().tolist())
+        sectors = ["Semua"] + sorted(contracts["Sektor"].dropna().astype(str).unique().tolist())
+        budget_positions = ["Semua"] + sorted(contracts["Pos Budget"].dropna().astype(str).unique().tolist())
+        job_categories = ["Semua"] + sorted(contracts["Kategori Pekerjaan"].dropna().astype(str).unique().tolist())
 
+        selected_zone = f1.selectbox("Zona", zones)
+        selected_sector = f2.selectbox("Sektor", sectors)
+        selected_budget = f3.selectbox("Pos Budget", budget_positions)
+        selected_job_category = f4.selectbox("Kategori Pekerjaan", job_categories)
+
+        f5, f6 = st.columns(2)
+        sticker_sizes = ["Semua"] + sorted(contracts["Ukuran Sticker Panel Toko"].dropna().astype(str).unique().tolist())
+        screen_sizes = ["Semua"] + sorted(contracts["Ukuran Layar"].dropna().astype(str).unique().tolist())
+        selected_sticker_size = f5.selectbox("Ukuran Sticker Panel", sticker_sizes)
+        selected_screen_size = f6.selectbox("Ukuran Layar", screen_sizes)
+
+    # TERAPKAN FILTER
     view = contracts.copy()
+    if search_query.strip():
+        q = search_query.strip().casefold()
+        mask = (
+            view["ID Outlet"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
+            | view["Nama Customer"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
+            | view["Alamat"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
+            | view["Brand"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
+        )
+        view = view[mask]
+
+    if selected_status != "Semua Status":
+        view = view[view["Status Kontrak"] == selected_status]
     if selected_zone != "Semua":
         view = view[view["Zona"] == selected_zone]
     if selected_sector != "Semua":
@@ -812,110 +1039,116 @@ if active_menu == "Dashboard":
         view = view[view["Pos Budget"] == selected_budget]
     if selected_job_category != "Semua":
         view = view[view["Kategori Pekerjaan"] == selected_job_category]
-    if selected_status != "Semua":
-        view = view[view["Status Kontrak"] == selected_status]
     if selected_sticker_size != "Semua":
         view = view[view["Ukuran Sticker Panel Toko"] == selected_sticker_size]
     if selected_screen_size != "Semua":
         view = view[view["Ukuran Layar"] == selected_screen_size]
-    st.subheader("Hasil filter data kontrak")
-    st.metric("Jumlah customer sesuai filter", f"{len(view):,}".replace(",", "."))
-    groups = view["Pos Budget"].map(budget_group)
-    regular_view = view.loc[groups.eq("")]
-    venue_view = view.loc[groups.eq("Venue")]
-    other_permanent_view = view.loc[groups.eq("Others Permanen")]
-    download_columns = st.columns(3)
-    download_specs = [
-        (
-            "Download Daftar customer - Retail Suplay kontrak Excel",
-            regular_view,
-            "Daftar_Customer_dan_Status_Kontrak.xlsx",
-            "download_regular_contracts",
-        ),
-        (
-            "Download Daftar customer - Venue Excel",
-            venue_view,
-            "Daftar_Customer_Venue.xlsx",
-            "download_venue_contracts",
-        ),
-        (
-            "Download Daftar customer - Others Permanen Excel",
-            other_permanent_view,
-            "Daftar_Customer_Others_Permanen.xlsx",
-            "download_other_permanent_contracts",
-        ),
-    ]
-    for column, (label, data, filename, key) in zip(download_columns, download_specs):
-        column.download_button(
-            label,
-            data=excel_bytes(data.sort_values("Sisa Hari", na_position="last")),
-            file_name=filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key=key,
-            use_container_width=True,
-        )
+
+    st.caption(f"Menampilkan **{len(view):,}** dari **{len(contracts):,}** total customer.".replace(",", "."))
+
+    # TAMPILAN TABEL BERBASIS TAB
     if view.empty:
-        st.info("Belum ada data yang cocok. Gunakan bagian Upload / Download Excel pada dashboard untuk memasukkan data.")
+        st.info("Tidak ada data yang cocok dengan kriteria pencarian/filter. Coba ubah filter atau impor data baru di menu **Import & Sinkronisasi**.")
     else:
-        selected_group = budget_group(selected_budget)
-        if selected_budget == "Semua":
-            render_dashboard_table("Daftar customer - Retail Supply", regular_view)
-            render_dashboard_table("Daftar customer - Venue", venue_view)
-            render_dashboard_table("Daftar customer - Others Permanen", other_permanent_view)
-        elif selected_group == "Venue":
-            render_dashboard_table("Daftar customer - Venue", venue_view)
-        elif selected_group == "Others Permanen":
-            render_dashboard_table("Daftar customer - Others Permanen", other_permanent_view)
-        else:
-            render_dashboard_table("Daftar customer dan status kontrak", regular_view)
+        groups = view["Pos Budget"].map(budget_group)
+        regular_view = view.loc[groups.eq("")]
+        venue_view = view.loc[groups.eq("Venue")]
+        other_permanent_view = view.loc[groups.eq("Others Permanen")]
 
-elif active_menu == "Edit data customer":
-    st.header("Edit data customer")
-    if contracts.empty:
-        st.info("Data customer belum ada. Gunakan menu **Tambah customer baru** atau bagian Upload / Download Excel pada dashboard.")
-    else:
-        record_options = [
-            f"{i} | {safe_text(row['ID Outlet']) or 'Tanpa ID'} | {safe_text(row['Nama Customer']) or 'Tanpa nama'}"
-            for i, row in contracts.iterrows()
-        ]
-        selected_record = st.selectbox("Pilih customer yang akan diedit", record_options, key="selected_customer_record")
-        selected_index = int(selected_record.split(" | ", 1)[0])
-        submitted, updated_record = render_outlet_form(contracts.loc[selected_index], selected_index)
-        if submitted:
-            updated_data = contracts[COLUMNS].copy()
-            for column, value in updated_record.items():
-                updated_data.at[selected_index, column] = value
-            problems = validate_data(updated_data)
-            if problems:
-                st.error("\n".join(problems))
-            else:
-                try:
-                    save_data(updated_data)
-                    st.session_state.contracts = normalize_data(updated_data)
-                    st.success("Data customer berhasil diperbarui.")
-                    st.rerun()
-                except Exception as error:
-                    st.error(f"Gagal menyimpan data: {error}")
-        st.divider()
-        st.subheader("Hapus customer")
-        if st.button("Hapus customer yang dipilih", type="secondary", key="delete_customer"):
-            try:
-                updated_data = st.session_state.contracts.drop(index=selected_index).reset_index(drop=True)
-                save_data(updated_data)
-                st.session_state.contracts = normalize_data(updated_data)
-                st.success("Customer berhasil dihapus.")
-                st.rerun()
-            except Exception as error:
-                st.error(f"Gagal menghapus customer: {error}")
+        tab_all, tab_retail, tab_venue, tab_other = st.tabs([
+            f"📋 Semua ({len(view)})",
+            f"🏪 Retail Supply ({len(regular_view)})",
+            f"🏟️ Venue ({len(venue_view)})",
+            f"🏢 Others Permanen ({len(other_permanent_view)})",
+        ])
 
-elif active_menu == "Tambah customer baru":
-    st.header("Tambah customer baru")
-    tab_form, tab_excel_batch = st.tabs([
-        "Input manual (Form)",
-        "Download template & upload Excel",
+        with tab_all:
+            render_dashboard_table(
+                "Semua Data Customer Terfilter",
+                view,
+                "Daftar_Semua_Customer_Terfilter.xlsx",
+                "dl_all_filtered",
+            )
+        with tab_retail:
+            render_dashboard_table(
+                "Daftar Customer - Retail Supply",
+                regular_view,
+                "Daftar_Customer_Retail_Supply.xlsx",
+                "dl_retail_filtered",
+            )
+        with tab_venue:
+            render_dashboard_table(
+                "Daftar Customer - Venue",
+                venue_view,
+                "Daftar_Customer_Venue.xlsx",
+                "dl_venue_filtered",
+            )
+        with tab_other:
+            render_dashboard_table(
+                "Daftar Customer - Others Permanen",
+                other_permanent_view,
+                "Daftar_Customer_Others_Permanen.xlsx",
+                "dl_other_filtered",
+            )
+
+
+# ==========================================
+# HALAMAN 2: KELOLA DATA CUSTOMER
+# ==========================================
+elif active_menu == "👥 Kelola Data Customer":
+    tab_edit, tab_add_manual, tab_add_batch = st.tabs([
+        "✏️ Edit / Hapus Customer",
+        "➕ Tambah Customer (Form)",
+        "📑 Tambah Massal (Excel)",
     ])
 
-    with tab_form:
+    # TAB 1: EDIT & HAPUS
+    with tab_edit:
+        if contracts.empty:
+            st.info("Belum ada data customer. Silakan tambah customer baru atau import Excel.")
+        else:
+            record_options = [
+                f"{i} | {safe_text(row['ID Outlet']) or 'Tanpa ID'} — {safe_text(row['Nama Customer']) or 'Tanpa Nama'} ({safe_text(row['Zona']) or '-'})"
+                for i, row in contracts.iterrows()
+            ]
+            selected_record = st.selectbox(
+                "Pilih Customer yang Ingin Diedit (ketik nama atau ID untuk mencari)",
+                record_options,
+                key="selected_customer_record",
+            )
+            selected_index = int(selected_record.split(" | ", 1)[0])
+            submitted, updated_record = render_outlet_form(contracts.loc[selected_index], selected_index)
+
+            if submitted:
+                updated_data = contracts[COLUMNS].copy()
+                for column, value in updated_record.items():
+                    updated_data.at[selected_index, column] = value
+                problems = validate_data(updated_data)
+                if problems:
+                    st.error("\n".join(problems))
+                else:
+                    try:
+                        save_data(updated_data)
+                        st.session_state.contracts = normalize_data(updated_data)
+                        st.success("✅ Data customer berhasil diperbarui!")
+                        st.rerun()
+                    except Exception as error:
+                        st.error(f"Gagal menyimpan data: {error}")
+
+            with st.expander("🗑️ Zona Berbahaya: Hapus Customer Ini"):
+                st.warning("Tindakan ini akan menghapus data customer secara permanen dari daftar aktif.")
+                if st.button("Hapus Customer Terpilih", type="secondary", key="delete_customer"):
+                    try:
+                        updated_data = st.session_state.contracts.drop(index=selected_index).reset_index(drop=True)
+                        save_data(updated_data)
+                        st.session_state.contracts = normalize_data(updated_data)
+                        st.success("Customer berhasil dihapus.")
+                        st.rerun()
+                    except Exception as error:
+                        st.error(f"Gagal menghapus customer: {error}")
+
+    # TAB 2: TAMBAH MANUAL
+    with tab_add_manual:
         blank_record = pd.Series({column: pd.NA for column in COLUMNS})
         submitted, new_record = render_outlet_form(blank_record, None)
         if submitted:
@@ -927,17 +1160,14 @@ elif active_menu == "Tambah customer baru":
                 try:
                     save_data(updated_data)
                     st.session_state.contracts = normalize_data(updated_data)
-                    st.success("Customer baru berhasil ditambahkan dan disimpan ke database.")
+                    st.success("✅ Customer baru berhasil ditambahkan!")
                     st.rerun()
                 except Exception as error:
                     st.error(f"Gagal menyimpan customer baru: {error}")
 
-    with tab_excel_batch:
-        st.subheader("1. Download template Excel tambah customer baru")
-        st.caption(
-            "Isi baris customer baru sesuai format kolom template. Untuk kolom centang materi "
-            "(Panel Toko, Showcase, Layar Toko, Shop Sign / Neon Box), gunakan tanda ✓ atau YA/TRUE."
-        )
+    # TAB 3: TAMBAH MASSAL EXCEL
+    with tab_add_batch:
+        st.markdown("##### Langkah 1: Unduh Template Excel")
         sample_row = pd.DataFrame(
             [{
                 "ID Outlet": "501X9999",
@@ -963,45 +1193,38 @@ elif active_menu == "Tambah customer baru":
                 "Brand Layar": pd.NA,
             }]
         )
-        dl_col1, dl_col2 = st.columns(2)
-        dl_col1.download_button(
-            "Download template Excel (kosong)",
+        dl1, dl2 = st.columns(2)
+        dl1.download_button(
+            "📄 Template Kosong (.xlsx)",
             data=excel_bytes(pd.DataFrame(columns=COLUMNS)),
             file_name="Template_Tambah_Customer_Baru.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="btn_dl_template_tambah_customer_kosong",
             use_container_width=True,
         )
-        dl_col2.download_button(
-            "Download template Excel + contoh baris",
+        dl2.download_button(
+            "📝 Template + Contoh Pengisian (.xlsx)",
             data=excel_bytes(sample_row[COLUMNS]),
             file_name="Template_Tambah_Customer_Baru_Contoh.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="btn_dl_template_tambah_customer_contoh",
             use_container_width=True,
         )
 
         st.divider()
-        st.subheader("2. Upload Excel & simpan customer baru ke database")
-        batch_upload = st.file_uploader(
-            "Upload file Excel customer baru (.xlsx)",
-            type=["xlsx"],
-            key="batch_new_customer_upload",
-        )
+        st.markdown("##### Langkah 2: Upload File Excel Customer Baru")
+        batch_upload = st.file_uploader("Pilih file Excel (.xlsx)", type=["xlsx"], key="batch_new_customer_upload")
         skip_duplicate_id = st.checkbox(
-            "Lewati baris jika ID Outlet sudah ada di database (hindari duplikat)",
+            "Lewati baris jika ID Outlet sudah terdaftar (cegah duplikat)",
             value=True,
             key="skip_dup_id_new_customer",
         )
-
-        if st.button("Simpan customer baru ke database", type="primary", key="btn_save_batch_new_customer"):
+        if st.button("🚀 Tambahkan ke Database", type="primary", key="btn_save_batch_new_customer"):
             if batch_upload is None:
-                st.warning("Pilih file Excel customer baru terlebih dahulu.")
+                st.warning("Pilih file Excel terlebih dahulu.")
             else:
                 try:
                     new_rows = read_workbook(batch_upload)
                     if new_rows.empty:
-                        st.warning("Tidak ada baris data customer valid yang ditemukan pada file Excel.")
+                        st.warning("Tidak ditemukan baris data valid pada file Excel.")
                     else:
                         existing_keys = {
                             customer_id_key(val)
@@ -1022,196 +1245,209 @@ elif active_menu == "Tambah customer baru":
                             rows_to_add.append(r[COLUMNS])
 
                         if not rows_to_add:
-                            st.info(
-                                f"Tidak ada customer baru yang ditambahkan. "
-                                f"{len(skipped_ids)} baris dilewati karena ID Outlet sudah terdaftar."
-                            )
+                            st.info(f"Tidak ada data baru ditambahkan ({len(skipped_ids)} ID sudah terdaftar).")
                         else:
-                            combined = pd.concat(
-                                [contracts[COLUMNS], pd.DataFrame(rows_to_add)],
-                                ignore_index=True,
-                            )
+                            combined = pd.concat([contracts[COLUMNS], pd.DataFrame(rows_to_add)], ignore_index=True)
                             problems = validate_data(combined)
                             if problems:
                                 st.error("\n".join(problems))
                             else:
                                 save_data(combined)
-                                normalized_combined = normalize_data(combined)
-                                st.session_state.contracts = normalized_combined
+                                st.session_state.contracts = normalize_data(combined)
                                 st.session_state.load_warning = None
-                                skipped_preview = ", ".join(skipped_ids[:15])
-                                st.success(
-                                    f"Berhasil menyimpan {len(rows_to_add)} customer baru ke database "
-                                    f"(total data aktif: {len(normalized_combined)} baris)."
-                                )
+                                st.success(f"✅ Berhasil menambahkan {len(rows_to_add)} customer baru!")
                                 if skipped_ids:
-                                    st.info(
-                                        f"{len(skipped_ids)} baris dilewati (ID sudah ada): "
-                                        f"{skipped_preview}"
-                                    )
+                                    st.info(f"Dilewati ({len(skipped_ids)} ID duplikat): {', '.join(skipped_ids[:15])}")
                                 st.rerun()
                 except Exception as error:
-                    st.error(f"Gagal memproses/menyimpan file Excel customer baru: {error}")
+                    st.error(f"Gagal memproses file: {error}")
 
-elif active_menu == "Import data branding":
-    st.header("Import data outlet branding")
-    st.caption(
-        "Data dengan ID Customer ganda dipilih berdasarkan Tanggal Pekerjaan Sampai terbaru. "
-        "ID yang ditemukan memperbarui data customer; ID yang belum ada tidak ditambahkan ke tabel."
-    )
-    branding_upload = st.file_uploader(
-        "Upload laporan SPKS Branding (.xlsx)",
-        type=["xlsx"],
-        key="branding_workbook_upload",
-    )
-    if st.button("Proses dan update data customer", type="primary"):
-        st.session_state.pop("branding_import_result", None)
-        if branding_upload is None:
-            st.warning("Pilih file laporan branding terlebih dahulu.")
-        else:
-            try:
-                branding_data = read_branding_workbook(branding_upload)
-                updated, unmatched, duplicates, updated_count = apply_branding_updates(
-                    st.session_state.contracts, branding_data
-                )
-                problems = validate_data(updated)
-                if problems:
-                    st.error("\n".join(problems))
+
+# ==========================================
+# HALAMAN 3: IMPORT & SINKRONISASI
+# ==========================================
+elif active_menu == "🔄 Import & Sinkronisasi":
+    tab_main_import, tab_branding, tab_panel_sync = st.tabs([
+        "📥 Replace Workbook Utama",
+        "🏷️ Update SPKS Branding",
+        "📐 Sinkronisasi Ukuran Panel & Layar",
+    ])
+
+    # TAB 1: REPLACE WORKBOOK UTAMA
+    with tab_main_import:
+        st.info("Fitur ini akan **mengganti seluruh database** dengan isi file Excel yang Anda unggah.")
+        col_up, col_tpl = st.columns([2, 1])
+        with col_up:
+            upload = st.file_uploader("Upload Workbook Excel (.xlsx)", type=["xlsx"], key="workbook_upload")
+            if st.button("Import & Ganti Semua Data", type="primary", key="import_contract_workbook"):
+                if upload is None:
+                    st.warning("Pilih file Excel terlebih dahulu.")
                 else:
-                    if updated_count:
-                        save_data(updated)
-                        st.session_state.contracts = updated
-                    unmatched_has_id = unmatched["ID Customer"].map(customer_id_key).ne("")
-                    st.session_state.branding_import_result = {
-                        "duplicate_ids": int(duplicates["ID Customer"].nunique()),
-                        "duplicate_rows": len(duplicates),
-                        "updated_count": updated_count,
-                        "unmatched_id_count": int(unmatched_has_id.sum()),
-                        "missing_id_count": int((~unmatched_has_id).sum()),
-                        "unmatched": unmatched,
-                        "duplicates": duplicates,
-                    }
-                    st.success(
-                        f"Proses selesai: {updated_count} ID diperbarui, "
-                        f"{int(unmatched_has_id.sum())} ID tidak ditemukan, "
-                        f"dan {int((~unmatched_has_id).sum())} baris tidak memiliki ID."
+                    try:
+                        imported = read_workbook(upload)
+                        problems = validate_data(imported)
+                        if problems:
+                            st.error("\n".join(problems))
+                        else:
+                            save_data(imported)
+                            st.session_state.contracts = imported
+                            st.session_state.load_warning = None
+                            st.success(f"✅ Berhasil mengimpor {len(imported)} baris data.")
+                            st.rerun()
+                    except Exception as error:
+                        st.error(f"Gagal mengimpor Excel: {error}")
+        with col_tpl:
+            st.markdown("##### Butuh Format Standar?")
+            st.download_button(
+                "📄 Download Template Utama",
+                data=excel_bytes(pd.DataFrame(columns=COLUMNS)),
+                file_name="Template_Monitoring_Kontrak_Outlet.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+    # TAB 2: UPDATE SPKS BRANDING
+    with tab_branding:
+        st.caption(
+            "Mengupdate data customer yang cocok berdasarkan **ID Customer** (mengambil tanggal pekerjaan paling baru jika terdapat duplikat)."
+        )
+        branding_upload = st.file_uploader("Upload Laporan SPKS Branding (.xlsx)", type=["xlsx"], key="branding_workbook_upload")
+        if st.button("Proses & Update Data Customer", type="primary"):
+            st.session_state.pop("branding_import_result", None)
+            if branding_upload is None:
+                st.warning("Pilih file laporan branding terlebih dahulu.")
+            else:
+                try:
+                    branding_data = read_branding_workbook(branding_upload)
+                    updated, unmatched, duplicates, updated_count = apply_branding_updates(
+                        st.session_state.contracts, branding_data
                     )
-            except Exception as error:
-                st.error(f"Gagal memproses laporan branding: {error}")
-
-    import_result = st.session_state.get("branding_import_result")
-    if import_result:
-        summary_cols = st.columns(4)
-        summary_cols[0].metric(
-            "ID duplikat (baris)",
-            f"{import_result['duplicate_ids']} ({import_result['duplicate_rows']})",
-        )
-        summary_cols[1].metric("ID diperbarui", import_result["updated_count"])
-        summary_cols[2].metric("ID tidak ditemukan", import_result["unmatched_id_count"])
-        summary_cols[3].metric("Baris tanpa ID", import_result["missing_id_count"])
-        if import_result["duplicate_rows"]:
-            st.subheader("Data ID duplikat")
-            st.caption("Baris dengan tanda Dipakai adalah data yang dipilih karena tanggal pekerjaan sampai paling baru.")
-            duplicate_columns = [
-                "ID Customer", "Customer", "Tanggal Pekerjaan Sampai",
-                "No. Dokumen", "Dipakai",
-            ]
-            st.dataframe(
-                import_result["duplicates"][duplicate_columns],
-                use_container_width=True,
-                hide_index=True,
-            )
-        missing_ids = import_result["unmatched"][
-            import_result["unmatched"]["ID Customer"].map(customer_id_key).ne("")
-        ]
-        if missing_ids.empty:
-            st.info("Semua ID Customer pada laporan ditemukan di Daftar customer.")
-        else:
-            st.subheader("ID branding yang tidak ditemukan di Daftar customer")
-            missing_columns = [
-                "ID Customer", "Customer", "Customer Group Category", "Alamat",
-                "Zona", "Finance Brand", "Nominal", "Tanggal Pekerjaan Dari",
-                "Tanggal Pekerjaan Sampai", "No. Dokumen",
-            ]
-            st.dataframe(
-                missing_ids[missing_columns],
-                use_container_width=True,
-                hide_index=True,
-            )
-        without_ids = import_result["unmatched"][
-            import_result["unmatched"]["ID Customer"].map(customer_id_key).eq("")
-        ]
-        if not without_ids.empty:
-            st.subheader("Baris laporan tanpa ID Customer")
-            st.caption("Baris ini tidak dapat dibandingkan atau diperbarui karena ID Customer kosong.")
-            missing_columns = [
-                "ID Customer", "Customer", "Customer Group Category", "Alamat",
-                "Zona", "Finance Brand", "Nominal", "Tanggal Pekerjaan Dari",
-                "Tanggal Pekerjaan Sampai", "No. Dokumen",
-            ]
-            st.dataframe(without_ids[missing_columns], use_container_width=True, hide_index=True)
-
-elif active_menu == "Backup & Restore Supabase":
-    st.header("Backup & Restore ke Supabase")
-    st.caption(
-        "Simpan snapshot data kontrak ke tabel Supabase dan pulihkan kembali kapan saja."
-    )
-    sb_url, sb_key, sb_table = _supabase_config()
-    if not sb_url or not sb_key:
-        st.warning(
-            "Atur SUPABASE_URL dan SUPABASE_SERVICE_ROLE_KEY (atau SUPABASE_ANON_KEY) "
-            "di Streamlit secrets untuk mengaktifkan Backup & Restore Supabase."
-        )
-    else:
-        st.info(f"Tabel target: {sb_table} | Data aktif saat ini: {len(st.session_state.contracts)} outlet.")
-        b_col, r_col = st.columns(2)
-        with b_col:
-            st.subheader("Backup ke Supabase")
-            if st.button("Backup data ke Supabase", type="primary", key="btn_backup_supabase"):
-                try:
-                    saved_cnt = backup_to_supabase(st.session_state.contracts, sb_url, sb_key, sb_table)
-                    st.success(f"Backup berhasil: {saved_cnt} baris tersimpan di Supabase.")
-                except Exception as error:
-                    st.error(f"Backup ke Supabase gagal: {error}")
-        with r_col:
-            st.subheader("Restore dari Supabase")
-            if st.button("Restore data dari Supabase", type="secondary", key="btn_restore_supabase"):
-                try:
-                    restored_df = restore_from_supabase(sb_url, sb_key, sb_table)
-                    problems = validate_data(restored_df)
+                    problems = validate_data(updated)
                     if problems:
                         st.error("\n".join(problems))
                     else:
-                        save_data(restored_df)
-                        st.session_state.contracts = restored_df
-                        st.session_state.load_warning = None
-                        st.success(f"Restore berhasil: {len(restored_df)} baris dimuat dari Supabase.")
-                        st.rerun()
+                        if updated_count:
+                            save_data(updated)
+                            st.session_state.contracts = updated
+                        unmatched_has_id = unmatched["ID Customer"].map(customer_id_key).ne("")
+                        st.session_state.branding_import_result = {
+                            "duplicate_ids": int(duplicates["ID Customer"].nunique()),
+                            "duplicate_rows": len(duplicates),
+                            "updated_count": updated_count,
+                            "unmatched_id_count": int(unmatched_has_id.sum()),
+                            "missing_id_count": int((~unmatched_has_id).sum()),
+                            "unmatched": unmatched,
+                            "duplicates": duplicates,
+                        }
+                        st.success(f"✅ Pembaruan selesai: {updated_count} ID berhasil diperbarui.")
                 except Exception as error:
-                    st.error(f"Restore dari Supabase gagal: {error}")
+                    st.error(f"Gagal memproses laporan branding: {error}")
 
-elif active_menu == "Backup ke Google Sheet":
-    st.header("Backup ke Google Sheet")
-    st.caption(
-        "Backup mengirim seluruh data Daftar customer dan mengganti isi tab "
-        f"'{SHEET_NAME}' pada spreadsheet yang terhubung ke Apps Script."
-    )
-    try:
-        backup_url = str(st.secrets.get("GOOGLE_APPS_SCRIPT_URL", "") or "").strip()
-    except FileNotFoundError:
-        backup_url = ""
-    if not backup_url:
-        st.warning("Atur GOOGLE_APPS_SCRIPT_URL di Streamlit secrets untuk mengaktifkan backup.")
-    else:
-        st.info(f"Data yang akan dibackup: {len(st.session_state.contracts)} outlet.")
-        st.warning("Backup akan mengganti isi tab tujuan dengan data outlet saat ini.")
-        st.warning("Siapa pun yang mengetahui URL Web App dapat menjalankan backup dan menimpa isi tab tujuan. Jaga URL tersebut.")
-        if st.button("Backup data sekarang", type="primary"):
+        import_result = st.session_state.get("branding_import_result")
+        if import_result:
+            s1, s2, s3, s4 = st.columns(4)
+            s1.metric("ID Duplikat", f"{import_result['duplicate_ids']} ({import_result['duplicate_rows']} brs)")
+            s2.metric("ID Diperbarui", import_result["updated_count"])
+            s3.metric("ID Tidak Ditemukan", import_result["unmatched_id_count"])
+            s4.metric("Baris Tanpa ID", import_result["missing_id_count"])
+
+            if import_result["duplicate_rows"]:
+                with st.expander("Lihat Detail ID Duplikat"):
+                    st.dataframe(
+                        import_result["duplicates"][["ID Customer", "Customer", "Tanggal Pekerjaan Sampai", "No. Dokumen", "Dipakai"]],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+            missing_ids = import_result["unmatched"][import_result["unmatched"]["ID Customer"].map(customer_id_key).ne("")]
+            if not missing_ids.empty:
+                with st.expander(f"Lihat {len(missing_ids)} ID yang Tidak Ditemukan di Database"):
+                    st.dataframe(missing_ids, use_container_width=True, hide_index=True)
+
+    # TAB 3: SINKRONISASI PANEL & LAYAR
+    with tab_panel_sync:
+        st.caption("Mencocokkan ukuran sticker panel, brand panel, dan ukuran layar dari sheet DRP berdasarkan ID Customer.")
+        sync_upload = st.file_uploader("Upload File Sumber Panel & Layar (.xlsx)", type=["xlsx"], key="sync_panel_screen_upload")
+        overwrite_sync = st.checkbox("Timpa nilai yang sudah terisi jika ID Customer cocok", value=False, key="overwrite_panel_screen_sync")
+        if st.button("🔗 Hubungkan & Sinkronkan", type="primary", key="btn_sync_panel_screen"):
+            if sync_upload is None:
+                st.warning("Pilih file Excel sumber terlebih dahulu.")
+            else:
+                try:
+                    drp_source = read_drp_sheet(sync_upload)
+                    if drp_source is not None and not drp_source.empty:
+                        source_frame = drp_source
+                    else:
+                        sync_upload.seek(0)
+                        source_frame = read_workbook(sync_upload)
+                    merged_df, updated_cnt, missing_list = merge_panel_screen_by_id(
+                        st.session_state.contracts,
+                        source_frame,
+                        overwrite_existing=overwrite_sync,
+                    )
+                    save_data(merged_df)
+                    st.session_state.contracts = merged_df
+                    st.success(f"✅ Sinkronisasi selesai: {updated_cnt} baris customer diperbarui.")
+                    if missing_list:
+                        st.info(f"{len(missing_list)} ID tidak ditemukan: {', '.join(missing_list[:15])}")
+                except Exception as error:
+                    st.error(f"Gagal sinkronisasi: {error}")
+
+
+# ==========================================
+# HALAMAN 4: BACKUP & RESTORE CLOUD
+# ==========================================
+elif active_menu == "☁️ Backup & Restore":
+    col_sb, col_gs = st.columns(2)
+
+    # KOLOM SUPABASE
+    with col_sb:
+        with st.container(border=True):
+            st.subheader("🗄️ Supabase Cloud")
+            st.caption("Simpan snapshot database atau pulihkan data terakhir dari Supabase.")
+            sb_url, sb_key, sb_table = _supabase_config()
+            if not sb_url or not sb_key:
+                st.warning("Konfigurasi `SUPABASE_URL` dan `SUPABASE_SERVICE_ROLE_KEY` belum diatur di Streamlit Secrets.")
+            else:
+                st.info(f"Tabel: `{sb_table}` • Data saat ini: **{len(st.session_state.contracts)}** outlet")
+                b1, b2 = st.columns(2)
+                if b1.button("⬆️ Backup Sekarang", type="primary", use_container_width=True, key="btn_backup_supabase"):
+                    try:
+                        saved_cnt = backup_to_supabase(st.session_state.contracts, sb_url, sb_key, sb_table)
+                        st.success(f"✅ {saved_cnt} baris tersimpan.")
+                    except Exception as error:
+                        st.error(f"Gagal backup: {error}")
+
+                if b2.button("⬇️ Restore Data", type="secondary", use_container_width=True, key="btn_restore_supabase"):
+                    try:
+                        restored_df = restore_from_supabase(sb_url, sb_key, sb_table)
+                        problems = validate_data(restored_df)
+                        if problems:
+                            st.error("\n".join(problems))
+                        else:
+                            save_data(restored_df)
+                            st.session_state.contracts = restored_df
+                            st.session_state.load_warning = None
+                            st.success(f"✅ {len(restored_df)} baris dipulihkan.")
+                            st.rerun()
+                    except Exception as error:
+                        st.error(f"Gagal restore: {error}")
+
+    # KOLOM GOOGLE SHEETS
+    with col_gs:
+        with st.container(border=True):
+            st.subheader("📗 Google Sheets")
+            st.caption(f"Kirim seluruh data aktif ke tab `{SHEET_NAME}` melalui Google Apps Script.")
             try:
-                row_count = backup_to_google_sheet(
-                    st.session_state.contracts,
-                    backup_url,
-                )
-                st.success(f"Backup berhasil: {row_count} baris tersimpan di Google Sheet.")
-            except Exception as error:
-                st.error(f"Backup ke Google Sheet gagal: {error}")
+                backup_url = str(st.secrets.get("GOOGLE_APPS_SCRIPT_URL", "") or "").strip()
+            except FileNotFoundError:
+                backup_url = ""
+            if not backup_url:
+                st.warning("Konfigurasi `GOOGLE_APPS_SCRIPT_URL` belum diatur di Streamlit Secrets.")
+            else:
+                st.info(f"Siap mengirim **{len(st.session_state.contracts)}** data outlet (akan menimpa tab tujuan).")
+                if st.button("⬆️ Backup ke Google Sheet", type="primary", use_container_width=True):
+                    try:
+                        row_count = backup_to_google_sheet(st.session_state.contracts, backup_url)
+                        st.success(f"✅ {row_count} baris berhasil dikirim ke Google Sheet.")
+                    except Exception as error:
+                        st.error(f"Gagal backup: {error}")
