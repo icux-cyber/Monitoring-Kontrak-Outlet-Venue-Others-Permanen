@@ -1777,8 +1777,8 @@ elif active_menu == "🔄 Import & Sinkronisasi":
     with tab_drp_crosscheck:
         st.markdown("#### 🔎 Crosscheck Data DRP dengan Dashboard & Monitoring")
         st.caption(
-            "Unggah file Excel DRP (contoh: `CODPR03 (DRP).xlsx`) untuk mencocokkan data berdasarkan **ID Customer** "
-            "dan langsung memperbarui data yang tidak sesuai ke Dashboard."
+            "Unggah file Excel DRP (contoh: `CODPR03 (DRP).xlsx`) untuk mencocokkan data berdasarkan **ID Customer**, "
+            "memperbarui data yang tidak sesuai, dan menambahkan data yang belum ada ke Dashboard."
         )
 
         drp_upload = st.file_uploader(
@@ -1955,8 +1955,123 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                 if missing_df.empty:
                     st.info("Seluruh ID Customer pada file DRP sudah terdaftar di Dashboard.")
                 else:
-                    st.caption("ID Customer berikut ada di file DRP namun belum terdaftar di Dashboard & Monitoring.")
-                    st.dataframe(missing_df, use_container_width=True, hide_index=True)
+                    st.markdown("**Data DRP Belum Ada di Dashboard — Pilih Baris untuk Ditambahkan Langsung**")
+                    st.caption("Centang baris pada kolom **Pilih Tambah**, atur informasi bawaan (opsional), lalu klik **Tambahkan Data Terpilih ke Dashboard**.")
+
+                    m_cfg1, m_cfg2, m_cfg3 = st.columns(3)
+                    default_sector = m_cfg1.text_input("Sektor Bawaan", value="Retail Supply", key="drp_add_default_sector")
+                    default_budget = m_cfg2.text_input("Pos Budget Bawaan", value="Small Retailer", key="drp_add_default_budget")
+                    default_job_cat = m_cfg3.text_input("Kategori Pekerjaan Bawaan", value="DRP", key="drp_add_default_job_cat")
+
+                    select_all_missing = st.checkbox(
+                        "Pilih semua baris yang belum ada di Dashboard",
+                        value=False,
+                        key="drp_select_all_missing",
+                    )
+
+                    missing_view_df = pd.DataFrame({
+                        "ID Customer": missing_df["ID Customer"].map(safe_text),
+                        "Nama Customer": missing_df["Customer"].map(safe_text),
+                        "Zona": missing_df["Zona"].map(safe_text),
+                        "Kategori Outlet": missing_df["Kategori Outlet"].map(safe_text),
+                        "Kategori DRP": missing_df["Kategori DRP"].map(safe_text),
+                        "Brand": missing_df["Brand"].map(safe_text),
+                        "Nominal Kontrak": missing_df["Nominal Kontrak"].map(lambda v: _fmt_val_cmp("Nominal Kontrak", v)),
+                        "Periode Kontrak Awal": missing_df["Periode Kontrak Awal"].map(lambda v: _fmt_val_cmp("Periode Kontrak Awal", v)),
+                        "Periode Kontrak Akhir": missing_df["Periode Kontrak Akhir"].map(lambda v: _fmt_val_cmp("Periode Kontrak Akhir", v)),
+                        "No. Dokumen": missing_df["No. Dokumen"].map(safe_text),
+                    })
+                    missing_view_df.insert(0, "Pilih Tambah", select_all_missing)
+
+                    edited_missing = st.data_editor(
+                        missing_view_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=400,
+                        disabled=list(missing_view_df.columns[1:]),
+                        key="drp_missing_editor",
+                    )
+
+                    m_dl_col, m_add_col = st.columns(2)
+                    m_dl_col.download_button(
+                        "📥 Download Data Belum Ada di Dashboard (.xlsx)",
+                        data=excel_bytes(missing_view_df.drop(columns=["Pilih Tambah"])),
+                        file_name="DRP_Belum_Ada_Di_Dashboard.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                    )
+
+                    if m_add_col.button(
+                        "➕ Tambahkan Data Terpilih ke Dashboard",
+                        type="primary",
+                        use_container_width=True,
+                        key="btn_add_missing_drp_to_dash",
+                    ):
+                        add_mask = edited_missing["Pilih Tambah"].fillna(False).to_numpy(dtype=bool)
+                        rows_to_insert_raw = missing_df.loc[add_mask]
+                        if rows_to_insert_raw.empty:
+                            st.warning("Centang minimal satu baris data untuk ditambahkan ke Dashboard.")
+                        else:
+                            current_contracts = normalize_data(st.session_state.contracts).copy()
+                            existing_keys = {
+                                customer_id_key(val)
+                                for val in current_contracts["ID Outlet"].dropna()
+                                if customer_id_key(val)
+                            }
+                            new_records = []
+                            skipped_existing = 0
+
+                            for _, r in rows_to_insert_raw.iterrows():
+                                k = customer_id_key(r.get("ID Customer"))
+                                if k and k in existing_keys:
+                                    skipped_existing += 1
+                                    continue
+                                if k:
+                                    existing_keys.add(k)
+
+                                new_records.append({
+                                    "ID Outlet": r.get("ID Customer", pd.NA),
+                                    "Nama Customer": r.get("Customer", pd.NA),
+                                    "Alamat": pd.NA,
+                                    "Zona": r.get("Zona", pd.NA),
+                                    "Sektor": default_sector.strip() or pd.NA,
+                                    "Pos Budget": default_budget.strip() or pd.NA,
+                                    "Kategori Outlet": r.get("Kategori Outlet", pd.NA),
+                                    "Kategori Pekerjaan": default_job_cat.strip() or r.get("Kategori DRP", pd.NA),
+                                    "Brand": r.get("Brand", pd.NA),
+                                    "Nominal Kontrak": r.get("Nominal Kontrak", pd.NA),
+                                    "Periode Kontrak Awal": r.get("Periode Kontrak Awal", pd.NaT),
+                                    "Periode Kontrak Akhir": r.get("Periode Kontrak Akhir", pd.NaT),
+                                    "No. Dokumen": r.get("No. Dokumen", pd.NA),
+                                    "Panel Toko": False,
+                                    "Showcase": False,
+                                    "Layar Toko": True,
+                                    "Shop Sign / Neon Box": False,
+                                    "Ukuran Panel Toko": pd.NA,
+                                    "Ukuran Sticker Panel Toko": pd.NA,
+                                    "Brand Panel": pd.NA,
+                                    "Ukuran Layar": pd.NA,
+                                    "Brand Layar": pd.NA,
+                                })
+
+                            if not new_records:
+                                st.info("Tidak ada baris baru ditambahkan karena ID sudah terdaftar di Dashboard.")
+                            else:
+                                combined_contracts = pd.concat(
+                                    [current_contracts[COLUMNS], pd.DataFrame(new_records)],
+                                    ignore_index=True,
+                                )
+                                problems = validate_data(combined_contracts)
+                                if problems:
+                                    st.error("\n".join(problems))
+                                else:
+                                    save_data(combined_contracts)
+                                    st.session_state.contracts = normalize_data(combined_contracts)
+                                    msg = f"✅ Berhasil menambahkan {len(new_records)} outlet baru ke Dashboard!"
+                                    if skipped_existing:
+                                        msg += f" ({skipped_existing} ID dilewati karena sudah ada)."
+                                    st.success(msg)
+                                    st.rerun()
 
     with tab_panel_sync:
         st.caption("Mencocokkan ukuran sticker panel, brand panel, dan ukuran layar dari sheet DRP berdasarkan ID Customer.")
