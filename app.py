@@ -383,6 +383,44 @@ def append_sticker_order_log(new_records: list[dict], existing_records: list[dic
     return save_sticker_order_log(merged)
 
 
+def update_log_status_for_rows(
+    all_records: list[dict],
+    target_df: pd.DataFrame,
+    new_status: str,
+) -> list[dict]:
+    normalized_all = normalize_sticker_order_records(all_records)
+    if target_df is None or target_df.empty or not normalized_all:
+        return normalized_all
+
+    target_keys: set[tuple[str, str, str, str, str, str]] = set()
+    for _, r in target_df.iterrows():
+        target_keys.add((
+            safe_text(r.get("Waktu Input")),
+            safe_text(r.get("ID Outlet")),
+            safe_text(r.get("Nama Outlet")),
+            safe_text(r.get("Brand")),
+            safe_text(r.get("Version")),
+            safe_text(r.get("Tanggal OrderPenggantian Sticker / Vinyl")),
+        ))
+
+    updated: list[dict] = []
+    for item in normalized_all:
+        rec = dict(item)
+        k = (
+            safe_text(rec.get("Waktu Input")),
+            safe_text(rec.get("ID Outlet")),
+            safe_text(rec.get("Nama Outlet")),
+            safe_text(rec.get("Brand")),
+            safe_text(rec.get("Version")),
+            safe_text(rec.get("Tanggal OrderPenggantian Sticker / Vinyl")),
+        )
+        if k in target_keys:
+            rec["Status Kirim Pejabat"] = new_status
+        updated.append(rec)
+
+    return save_sticker_order_log(updated)
+
+
 def parse_amount(value):
     if pd.isna(value) or str(value).strip() == "":
         return pd.NA
@@ -1632,12 +1670,24 @@ def excel_bytes(frame: pd.DataFrame, sheet_name: str = SHEET_NAME) -> bytes:
     return output.getvalue()
 
 
+def _get_secret_str(*keys: str, default: str = "") -> str:
+    for k in keys:
+        try:
+            val = st.secrets.get(k, "")
+        except FileNotFoundError:
+            val = ""
+        if val is not None and str(val).strip() != "":
+            return str(val).strip()
+    return default
+
+
 def backup_to_google_sheet(
     frame: pd.DataFrame,
     url: str,
     sticker_order_log: list[dict] | None = None,
 ) -> int:
-    if not url.startswith("https://script.google.com/"):
+    clean_url = str(url or "").strip()
+    if not clean_url.startswith("https://script.google.com/"):
         raise ValueError("URL backup harus menggunakan alamat HTTPS Google Apps Script.")
     normalized = normalize_data(frame)
     records = json.loads(normalized.to_json(orient="records", date_format="iso", force_ascii=False))
@@ -1651,7 +1701,7 @@ def backup_to_google_sheet(
         "sticker_order_log_columns": STICKER_LOG_COLUMNS,
         "backup_at": pd.Timestamp.now(tz="UTC").isoformat(),
     }
-    response = requests.post(url, json=payload, timeout=60)
+    response = requests.post(clean_url, json=payload, timeout=60)
     response.raise_for_status()
     try:
         result = response.json()
@@ -1673,26 +1723,20 @@ def _supabase_headers(api_key: str) -> dict[str, str]:
 
 
 def _supabase_config() -> tuple[str, str, str]:
-    try:
-        url = str(st.secrets.get("SUPABASE_URL", "") or "").strip().rstrip("/")
-    except FileNotFoundError:
-        url = ""
-    try:
-        key = (
-            str(
-                st.secrets.get("SUPABASE_SERVICE_ROLE_KEY", "")
-                or st.secrets.get("SUPABASE_ANON_KEY", "")
-                or st.secrets.get("SUPABASE_KEY", "")
-                or ""
-            )
-            .strip()
-        )
-    except FileNotFoundError:
-        key = ""
-    try:
-        table = str(st.secrets.get("SUPABASE_TABLE", "monitoring_kontrak_outlet") or "monitoring_kontrak_outlet").strip()
-    except FileNotFoundError:
-        table = "monitoring_kontrak_outlet"
+    url = _get_secret_str("SUPABASE_URL", "SUPADATA_URL", default="").rstrip("/")
+    key = _get_secret_str(
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_ANON_KEY",
+        "SUPABASE_KEY",
+        "SUPADATA_KEY",
+        "SUPADATA_SERVICE_ROLE_KEY",
+        default="",
+    )
+    table = _get_secret_str(
+        "SUPABASE_TABLE",
+        "SUPADATA_TABLE",
+        default="monitoring_kontrak_outlet",
+    )
     return url, key, table
 
 
@@ -1769,6 +1813,47 @@ def restore_from_supabase(url: str, api_key: str, table: str) -> tuple[pd.DataFr
     if not isinstance(raw_records, list) or not raw_records:
         return pd.DataFrame(columns=COLUMNS), restored_log
     return normalize_data(pd.DataFrame(raw_records)), restored_log
+
+
+def sync_all_cloud_targets(
+    contracts_df: pd.DataFrame,
+    sticker_order_log: list[dict],
+) -> tuple[list[str], list[str]]:
+    """Menyimpan data kontrak & log pemesanan ke Google Sheet dan Supabase."""
+    successes: list[str] = []
+    warnings_list: list[str] = []
+
+    gs_url = _get_secret_str("GOOGLE_APPS_SCRIPT_URL", default="")
+    if gs_url:
+        try:
+            row_cnt = backup_to_google_sheet(
+                contracts_df,
+                gs_url,
+                sticker_order_log=sticker_order_log,
+            )
+            successes.append(f"Google Sheet ({row_cnt} kontrak)")
+        except Exception as err:
+            warnings_list.append(f"Google Sheet: {err}")
+    else:
+        warnings_list.append("Google Sheet belum dikonfigurasi (`GOOGLE_APPS_SCRIPT_URL`).")
+
+    sb_url, sb_key, sb_table = _supabase_config()
+    if sb_url and sb_key:
+        try:
+            sb_cnt = backup_to_supabase(
+                contracts_df,
+                sb_url,
+                sb_key,
+                sb_table,
+                sticker_order_log=sticker_order_log,
+            )
+            successes.append(f"Supabase ({sb_cnt} kontrak)")
+        except Exception as err:
+            warnings_list.append(f"Supabase: {err}")
+    else:
+        warnings_list.append("Supabase belum dikonfigurasi (`SUPABASE_URL` & API key).")
+
+    return successes, warnings_list
 
 
 def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
@@ -2897,7 +2982,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                     st.error(f"❌ Gagal memproses & menyimpan file Excel: {error}")
 
     # ==========================================
-    # LOG HASIL PEMESANAN, DOWNLOAD (.XLSX & .PNG) & SEND TO PEJABAT
+    # LOG HASIL PEMESANAN, DOWNLOAD (.XLSX & .PNG), SIMPAN DATA & SEND TO PEJABAT
     # ==========================================
     st.divider()
     st.markdown("### 📋 Log Hasil Pemesanan & Kirim ke Pejabat")
@@ -2979,7 +3064,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             with st.expander("🖼️ Preview Hasil Gambar Pemesanan (.PNG)", expanded=True):
                 st.image(png_bytes_ready, caption="Hasil Pemesanan Penggantian Sticker / Vinyl Panel (ID Outlet disembunyikan)", width="stretch")
 
-        st.markdown("#### ✉️ Kirim Hasil Pemesanan ke Pejabat")
+        st.markdown("#### ✉️ Kirim Hasil Pemesanan ke Pejabat & Simpan Data")
         daftar_pejabat = st.session_state.pejabat_emails
         p_col1, p_col2 = st.columns([2, 1.5])
         with p_col1:
@@ -3071,19 +3156,107 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             f"&body={urllib.parse.quote(email_body)}"
         )
 
-        st.markdown(
-            f"""
-            <a href="{mailto_pejabat_url}" target="_blank" style="text-decoration: none;">
-                <div style="background-color: #1D4ED8; color: #FFFFFF; padding: 11px 18px; border-radius: 8px; text-align: center; font-weight: 700; font-size: 15px; margin-top: 8px;">
-                    ✉️ Send To Pejabat (To: Kosong | CC: {len(cc_list)} penerima)
-                </div>
-            </a>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.caption(
-            f"Tujuan **To**: *(dikosongkan)* • **CC**: `{cc_str or '-'}`"
-        )
+        act_p_col1, act_p_col2 = st.columns([1.3, 1.3])
+        if act_p_col1.button(
+            "💾 Simpan Data (Tanpa Mengirim Email ke Pejabat)",
+            type="secondary",
+            width="stretch",
+            key="btn_save_order_no_email",
+        ):
+            with st.spinner("Menyimpan data ke dashboard, Google Sheet, dan Supadata/Supabase..."):
+                try:
+                    updated_contracts_now = normalize_data(st.session_state.contracts)
+                    save_data(updated_contracts_now)
+                    st.session_state.contracts = updated_contracts_now
+                    _build_master_lookup_maps.clear()
+
+                    updated_log_now = update_log_status_for_rows(
+                        st.session_state.sticker_order_results,
+                        target_export_df,
+                        "Tersimpan (Tanpa Kirim Email)",
+                    )
+                    st.session_state.sticker_order_results = updated_log_now
+
+                    ok_targets, warn_targets = sync_all_cloud_targets(
+                        updated_contracts_now,
+                        updated_log_now,
+                    )
+                    st.session_state["last_order_action_status"] = {
+                        "type": "saved_no_email",
+                        "ok": ok_targets,
+                        "warn": warn_targets,
+                        "mailto_url": None,
+                        "cc_count": len(cc_list),
+                        "cc_str": cc_str,
+                    }
+                    st.rerun()
+                except Exception as err:
+                    st.error(f"Gagal menyimpan data: {err}")
+
+        if act_p_col2.button(
+            f"✉️ Send Email To Pejabat (To: Kosong | CC: {len(cc_list)})",
+            type="primary",
+            width="stretch",
+            key="btn_send_email_pejabat_and_save",
+        ):
+            with st.spinner("Menyimpan data ke dashboard, Google Sheet, dan Supadata/Supabase lalu menyiapkan email..."):
+                try:
+                    updated_contracts_now = normalize_data(st.session_state.contracts)
+                    save_data(updated_contracts_now)
+                    st.session_state.contracts = updated_contracts_now
+                    _build_master_lookup_maps.clear()
+
+                    updated_log_now = update_log_status_for_rows(
+                        st.session_state.sticker_order_results,
+                        target_export_df,
+                        "Disiapkan Kirim Email Pejabat",
+                    )
+                    st.session_state.sticker_order_results = updated_log_now
+
+                    ok_targets, warn_targets = sync_all_cloud_targets(
+                        updated_contracts_now,
+                        updated_log_now,
+                    )
+                    st.session_state["last_order_action_status"] = {
+                        "type": "sent_email",
+                        "ok": ok_targets,
+                        "warn": warn_targets,
+                        "mailto_url": mailto_pejabat_url,
+                        "cc_count": len(cc_list),
+                        "cc_str": cc_str,
+                    }
+                    st.rerun()
+                except Exception as err:
+                    st.error(f"Gagal menyimpan & menyiapkan email: {err}")
+
+        last_act = st.session_state.get("last_order_action_status")
+        if isinstance(last_act, dict):
+            if last_act.get("ok"):
+                st.success(
+                    "✅ Data terupdate ke **Dashboard** dan tersimpan di: **"
+                    + ", ".join(last_act["ok"])
+                    + "**."
+                )
+            else:
+                st.info("✅ Data terupdate ke **Dashboard** & penyimpanan lokal.")
+
+            for w_msg in last_act.get("warn") or []:
+                st.warning(f"⚠️ {w_msg}")
+
+            if last_act.get("type") == "sent_email" and last_act.get("mailto_url"):
+                st.markdown(
+                    f"""
+                    <a href="{last_act['mailto_url']}" target="_blank" style="text-decoration: none;">
+                        <div style="background-color: #1D4ED8; color: #FFFFFF; padding: 11px 18px; border-radius: 8px; text-align: center; font-weight: 700; font-size: 15px; margin-top: 8px;">
+                            📤 Buka Draft Email ke Pejabat Sekarang (To: Kosong | CC: {last_act.get('cc_count', 0)} penerima)
+                        </div>
+                    </a>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                st.caption(
+                    f"Tujuan **To**: *(dikosongkan)* • **CC**: `{last_act.get('cc_str') or '-'}`"
+                )
 
 
 # ==========================================
@@ -3614,11 +3787,11 @@ elif active_menu == "☁️ Backup & Restore":
 
     with col_sb:
         with st.container(border=True):
-            st.subheader("🗄️ Supabase Cloud")
-            st.caption("Simpan snapshot database & log pemesanan sticker atau pulihkan data terakhir dari Supabase.")
+            st.subheader("🗄️ Supabase / Supadata Cloud")
+            st.caption("Simpan snapshot database & log pemesanan sticker atau pulihkan data terakhir dari cloud.")
             sb_url, sb_key, sb_table = _supabase_config()
             if not sb_url or not sb_key:
-                st.warning("Konfigurasi `SUPABASE_URL` dan `SUPABASE_SERVICE_ROLE_KEY` belum diatur di Streamlit Secrets.")
+                st.warning("Konfigurasi URL dan API key Supabase/Supadata belum diatur di Streamlit Secrets.")
             else:
                 st.info(
                     f"Tabel: `{sb_table}` • Data kontrak: **{len(st.session_state.contracts)}** outlet • "
@@ -3662,10 +3835,7 @@ elif active_menu == "☁️ Backup & Restore":
         with st.container(border=True):
             st.subheader("📗 Google Sheets")
             st.caption(f"Kirim data kontrak ke tab `{SHEET_NAME}` beserta `sticker_order_log` melalui Google Apps Script.")
-            try:
-                backup_url = str(st.secrets.get("GOOGLE_APPS_SCRIPT_URL", "") or "").strip()
-            except FileNotFoundError:
-                backup_url = ""
+            backup_url = _get_secret_str("GOOGLE_APPS_SCRIPT_URL", default="")
             if not backup_url:
                 st.warning("Konfigurasi `GOOGLE_APPS_SCRIPT_URL` belum diatur di Streamlit Secrets.")
             else:
