@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from io import BytesIO
 
 import pandas as pd
@@ -10,9 +11,21 @@ import streamlit as st
 from services.contracts_service import COLUMNS, DATE_COLUMNS, MATERIAL_COLUMNS, SHEET_NAME, normalize_data, parse_tickmark
 from services.sticker_service import STICKER_LOG_COLUMNS, normalize_sticker_order_records
 
+_INVALID_SHEET_CHARS_RE = re.compile(r"[:\\/?*\[\]]+")  # <-- diubah
+
+
+def _sanitize_sheet_name(name: str, fallback: str = "Sheet1") -> str:  # <-- diubah
+    raw = str(name or "").strip()
+    cleaned = _INVALID_SHEET_CHARS_RE.sub(" - ", raw)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -.")
+    if not cleaned:
+        cleaned = re.sub(r"[:\\/?*\[\]]+", " ", str(fallback or "Sheet1")).strip() or "Sheet1"
+    return cleaned[:31]
+
 
 @st.cache_data(show_spinner=False)
 def _excel_bytes_cached(records_json: str, sheet_name: str, columns_tuple: tuple[str, ...]) -> bytes:
+    safe_sheet = _sanitize_sheet_name(sheet_name, fallback=SHEET_NAME)  # <-- diubah
     df = pd.DataFrame(json.loads(records_json)) if records_json else pd.DataFrame(columns=list(columns_tuple))
     output = BytesIO()
     export = df.drop(columns=["_search_blob", "Status Kontrak", "Sisa Hari"], errors="ignore").copy()
@@ -23,15 +36,16 @@ def _excel_bytes_cached(records_json: str, sheet_name: str, columns_tuple: tuple
         if column in export:
             export[column] = pd.to_datetime(export[column], errors="coerce").dt.strftime("%d/%m/%Y").fillna("")
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        export.to_excel(writer, sheet_name=sheet_name, index=False)
+        export.to_excel(writer, sheet_name=safe_sheet, index=False)  # <-- diubah
     return output.getvalue()
 
 
 def excel_bytes(frame: pd.DataFrame, sheet_name: str = SHEET_NAME) -> bytes:
+    safe_sheet = _sanitize_sheet_name(sheet_name, fallback=SHEET_NAME)  # <-- diubah
     clean_df = frame.drop(columns=["_search_blob"], errors="ignore")
     cols_tuple = tuple(str(c) for c in clean_df.columns)
     records_json = clean_df.to_json(orient="records", date_format="iso", force_ascii=False)
-    return _excel_bytes_cached(records_json, sheet_name, cols_tuple)
+    return _excel_bytes_cached(records_json, safe_sheet, cols_tuple)  # <-- diubah
 
 
 def get_secret_str(*keys: str, default: str = "") -> str:
