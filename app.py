@@ -82,6 +82,16 @@ st.set_page_config(
 )
 
 
+def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:  # <-- diubah
+    if df is None:
+        return pd.DataFrame(columns=COLUMNS)
+    out = df.copy()
+    for col in COLUMNS:
+        if col not in out.columns:
+            out[col] = pd.NA
+    return out
+
+
 def inject_custom_css() -> None:
     st.markdown(
         """
@@ -218,8 +228,9 @@ def reset_sticker_single_form() -> None:
 
 
 def set_contracts_state(df: pd.DataFrame, already_normalized: bool = False) -> pd.DataFrame:
-    normalized = df if already_normalized else normalize_data(df)
-    attached = attach_search_blob(normalized)
+    ensured = _ensure_columns(df)  # <-- diubah
+    normalized = ensured if already_normalized else normalize_data(ensured)
+    attached = _ensure_columns(attach_search_blob(normalized))  # <-- diubah
     st.session_state.contracts = attached
     st.session_state.pop("_master_lookup_cache", None)
     st.session_state.pop("sticker_order_png_bytes", None)
@@ -257,10 +268,10 @@ def render_dashboard_table(title: str, frame: pd.DataFrame, download_filename: s
             "ID Outlet": st.column_config.TextColumn("ID Outlet", width="small"),
             "Nama Customer": st.column_config.TextColumn("Nama Customer", width="large"),
             "Nominal Kontrak": st.column_config.TextColumn("Nominal Kontrak", width="medium"),
-            "Ukuran Sticker Panel Toko": st.column_config.TextColumn("Ukuran Sticker / Vinyl Panel", width="medium"),  # <-- diubah
-            "Brand Panel": st.column_config.TextColumn("Brand Sticker / Vinyl", width="medium"),  # <-- diubah
+            "Ukuran Sticker Panel Toko": st.column_config.TextColumn("Ukuran Sticker / Vinyl Panel", width="medium"),
+            "Brand Panel": st.column_config.TextColumn("Brand Sticker / Vinyl", width="medium"),
             "Versi": st.column_config.TextColumn("Versi", width="small"),
-            "Tanggal Penggantian Sticker Panel": st.column_config.TextColumn("Tgl Ganti Sticker / Vinyl Terakhir", width="medium"),  # <-- diubah
+            "Tanggal Penggantian Sticker Panel": st.column_config.TextColumn("Tgl Ganti Sticker / Vinyl Terakhir", width="medium"),
             "Nama Vendor": st.column_config.TextColumn("Nama Vendor", width="medium"),
         },
     )
@@ -271,23 +282,23 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool,
     with st.form(f"outlet_form_{suffix}", border=True):
         st.markdown("##### 1. Identitas & Lokasi Outlet")
         c1, c2, c3 = st.columns([1, 2, 1])
-        outlet_id = c1.text_input("ID Outlet *", value=safe_text(current["ID Outlet"]), placeholder="Contoh: 501X1234", key=f"id_{suffix}")
-        customer_name = c2.text_input("Nama Customer *", value=safe_text(current["Nama Customer"]), placeholder="Nama Toko / Outlet", key=f"name_{suffix}")
-        outlet_category = c3.text_input("Kategori Outlet", value=safe_text(current["Kategori Outlet"]), placeholder="Warung / Minimarket", key=f"outlet_category_{suffix}")
+        outlet_id = c1.text_input("ID Outlet *", value=safe_text(current.get("ID Outlet", pd.NA)), placeholder="Contoh: 501X1234", key=f"id_{suffix}")
+        customer_name = c2.text_input("Nama Customer *", value=safe_text(current.get("Nama Customer", pd.NA)), placeholder="Nama Toko / Outlet", key=f"name_{suffix}")
+        outlet_category = c3.text_input("Kategori Outlet", value=safe_text(current.get("Kategori Outlet", pd.NA)), placeholder="Warung / Minimarket", key=f"outlet_category_{suffix}")
 
-        address = st.text_input("Alamat Lengkap", value=safe_text(current["Alamat"]), placeholder="Jl. Raya...", key=f"address_{suffix}")
+        address = st.text_input("Alamat Lengkap", value=safe_text(current.get("Alamat", pd.NA)), placeholder="Jl. Raya...", key=f"address_{suffix}")
 
         z1, z2, z3, z4 = st.columns(4)
-        zone = z1.text_input("Zona", value=safe_text(current["Zona"]), key=f"zone_{suffix}")
-        sector = z2.text_input("Sektor", value=safe_text(current["Sektor"]), key=f"sector_{suffix}")
-        budget_pos = z3.text_input("Pos Budget", value=safe_text(current["Pos Budget"]), key=f"budget_{suffix}")
-        job_category = z4.text_input("Kategori Pekerjaan", value=safe_text(current["Kategori Pekerjaan"]), key=f"job_category_{suffix}")
+        zone = z1.text_input("Zona", value=safe_text(current.get("Zona", pd.NA)), key=f"zone_{suffix}")
+        sector = z2.text_input("Sektor", value=safe_text(current.get("Sektor", pd.NA)), key=f"sector_{suffix}")
+        budget_pos = z3.text_input("Pos Budget", value=safe_text(current.get("Pos Budget", pd.NA)), key=f"budget_{suffix}")
+        job_category = z4.text_input("Kategori Pekerjaan", value=safe_text(current.get("Kategori Pekerjaan", pd.NA)), key=f"job_category_{suffix}")
 
         st.divider()
         st.markdown("##### 2. Detail Kontrak & Nilai")
         k1, k2, k3, k4, k5 = st.columns(5)
-        brand = k1.text_input("Brand Utama", value=safe_text(current["Brand"]), key=f"brand_{suffix}")
-        parsed_amount = parse_amount(current["Nominal Kontrak"])
+        brand = k1.text_input("Brand Utama", value=safe_text(current.get("Brand", pd.NA)), key=f"brand_{suffix}")
+        parsed_amount = parse_amount(current.get("Nominal Kontrak", pd.NA))
         amount = k2.number_input(
             "Nominal Kontrak (Rp)",
             min_value=0.0,
@@ -295,33 +306,33 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool,
             value=0.0 if pd.isna(parsed_amount) else float(parsed_amount),
             key=f"amount_{suffix}",
         )
-        contract_start = k3.date_input("Tanggal Mulai", value=safe_date(current["Periode Kontrak Awal"]), key=f"start_{suffix}")
-        contract_end = k4.date_input("Tanggal Berakhir", value=safe_date(current["Periode Kontrak Akhir"]), key=f"end_{suffix}")
+        contract_start = k3.date_input("Tanggal Mulai", value=safe_date(current.get("Periode Kontrak Awal", pd.NA)), key=f"start_{suffix}")
+        contract_end = k4.date_input("Tanggal Berakhir", value=safe_date(current.get("Periode Kontrak Akhir", pd.NA)), key=f"end_{suffix}")
         doc_no = k5.text_input("No. Dokumen", value=safe_text(current.get("No. Dokumen", pd.NA)), key=f"doc_no_{suffix}")
 
         st.divider()
         st.markdown("##### 3. Materi Promosi & Spesifikasi Ukuran")
         material_cols = st.columns(4)
         material_values = {
-            column: material_cols[index].checkbox(column, value=parse_tickmark(current[column]), key=f"material_{index}_{suffix}")
+            column: material_cols[index].checkbox(column, value=parse_tickmark(current.get(column, False)), key=f"material_{index}_{suffix}")
             for index, column in enumerate(MATERIAL_COLUMNS)
         }
 
         p1, p2, p3, p4, p5, p6 = st.columns(6)
-        panel_size = p1.text_input("Ukuran Panel Toko", value=safe_text(current["Ukuran Panel Toko"]), placeholder="1 x 3 m", key=f"panel_size_{suffix}")
-        sticker_size = p2.text_input("Ukuran Sticker / Vinyl Panel", value=safe_text(current["Ukuran Sticker Panel Toko"]), placeholder="1 x 2 m", key=f"sticker_size_{suffix}")  # <-- diubah
-        panel_brand = p3.text_input("Brand Sticker / Vinyl", value=safe_text(current["Brand Panel"]), key=f"panel_brand_{suffix}")  # <-- diubah
+        panel_size = p1.text_input("Ukuran Panel Toko", value=safe_text(current.get("Ukuran Panel Toko", pd.NA)), placeholder="1 x 3 m", key=f"panel_size_{suffix}")
+        sticker_size = p2.text_input("Ukuran Sticker / Vinyl Panel", value=safe_text(current.get("Ukuran Sticker Panel Toko", pd.NA)), placeholder="1 x 2 m", key=f"sticker_size_{suffix}")
+        panel_brand = p3.text_input("Brand Sticker / Vinyl", value=safe_text(current.get("Brand Panel", pd.NA)), key=f"panel_brand_{suffix}")
         sticker_version = p4.text_input("Versi (Opsional)", value=safe_text(current.get("Versi", pd.NA)), placeholder="V1 / V2", key=f"sticker_version_{suffix}")
         sticker_replace_date = p5.date_input(
-            "Tgl Ganti Sticker / Vinyl Terakhir",  # <-- diubah
+            "Tgl Ganti Sticker / Vinyl Terakhir",
             value=safe_date(current.get("Tanggal Penggantian Sticker Panel", pd.NaT)),
             key=f"sticker_replace_date_{suffix}",
         )
         vendor_name = p6.text_input("Nama Vendor", value=safe_text(current.get("Nama Vendor", pd.NA)), placeholder="ARTISTIC", key=f"vendor_name_{suffix}")
 
         s1, s2 = st.columns(2)
-        screen_size = s1.text_input("Ukuran Layar", value=safe_text(current["Ukuran Layar"]), placeholder="2 x 3 m", key=f"screen_size_{suffix}")
-        screen_brand = s2.text_input("Brand Layar", value=safe_text(current["Brand Layar"]), key=f"screen_brand_{suffix}")
+        screen_size = s1.text_input("Ukuran Layar", value=safe_text(current.get("Ukuran Layar", pd.NA)), placeholder="2 x 3 m", key=f"screen_size_{suffix}")
+        screen_brand = s2.text_input("Brand Layar", value=safe_text(current.get("Brand Layar", pd.NA)), key=f"screen_brand_{suffix}")
 
         st.markdown("")
         submitted = st.form_submit_button("💾 Simpan Data Customer", type="primary", width="stretch")
@@ -360,10 +371,14 @@ inject_custom_css()
 
 if "contracts" not in st.session_state:
     initial, warning = load_initial_data()
-    st.session_state.contracts = initial
+    st.session_state.contracts = _ensure_columns(initial)  # <-- diubah
     st.session_state.load_warning = warning
-elif "_search_blob" not in st.session_state.contracts.columns:
-    st.session_state.contracts = attach_search_blob(normalize_data(st.session_state.contracts))
+else:
+    st.session_state.contracts = _ensure_columns(st.session_state.contracts)  # <-- diubah
+    if "_search_blob" not in st.session_state.contracts.columns:
+        st.session_state.contracts = _ensure_columns(
+            attach_search_blob(normalize_data(st.session_state.contracts))
+        )  # <-- diubah
 
 if "promo_stock" not in st.session_state:
     st.session_state.promo_stock = load_initial_promo_stock()
@@ -377,7 +392,7 @@ if "sticker_order_results" not in st.session_state:
 if "multi_select_all_state" not in st.session_state:
     st.session_state.multi_select_all_state = False
 
-contracts = compute_contract_status(st.session_state.contracts)
+contracts = _ensure_columns(compute_contract_status(st.session_state.contracts))  # <-- diubah
 promo_stock_df = st.session_state.promo_stock
 expired_count = int(contracts["Status Kontrak"].eq("🔴 Expired").sum())
 critical_count = int(contracts["Status Kontrak"].eq("🟠 Kritis (≤ 30 hari)").sum())
@@ -395,7 +410,7 @@ with st.sidebar:
         [
             "📊 Dashboard & Monitoring",
             "👥 Kelola Data Customer",
-            "🏷️ Pemesanan Sticker / Vinyl Panel",  # <-- diubah
+            "🏷️ Pemesanan Sticker / Vinyl Panel",
             "📦 List Materi Promosi",
             "🔄 Import & Sinkronisasi",
             "☁️ Backup & Restore",
@@ -410,7 +425,7 @@ with st.sidebar:
     st.write(f"• **Kritis (≤30 hr):** `{critical_count}`")
     st.write(f"• **Expired:** `{expired_count}`")
     st.write(f"• **Stok Sticker/Vinyl Ready:** `{len(promo_stock_df)}`")
-    st.write(f"• **Log Pemesanan Sticker / Vinyl:** `{len(st.session_state.sticker_order_results)}`")  # <-- diubah
+    st.write(f"• **Log Pemesanan Sticker / Vinyl:** `{len(st.session_state.sticker_order_results)}`")
 
     st.divider()
     st.download_button(
@@ -531,7 +546,7 @@ if active_menu == "📊 Dashboard & Monitoring":
         f5, f6 = st.columns(2)
         sticker_sizes = ["Semua"] + sorted(contracts["Ukuran Sticker Panel Toko"].dropna().astype(str).unique().tolist())
         screen_sizes = ["Semua"] + sorted(contracts["Ukuran Layar"].dropna().astype(str).unique().tolist())
-        selected_sticker_size = f5.selectbox("Ukuran Sticker / Vinyl Panel", sticker_sizes, key="dash_sticker_size")  # <-- diubah
+        selected_sticker_size = f5.selectbox("Ukuran Sticker / Vinyl Panel", sticker_sizes, key="dash_sticker_size")
         selected_screen_size = f6.selectbox("Ukuran Layar", screen_sizes, key="dash_screen_size")
 
     view = contracts.copy()
@@ -654,6 +669,7 @@ elif active_menu == "👥 Kelola Data Customer":
                     st.session_state.pop("multi_customer_data_editor", None)
                     st.rerun()
 
+                filtered_multi = _ensure_columns(filtered_multi)  # <-- diubah
                 editor_df = filtered_multi[COLUMNS].copy()
                 editor_df.insert(0, "Pilih", bool(st.session_state.multi_select_all_state))
 
@@ -712,7 +728,7 @@ elif active_menu == "👥 Kelola Data Customer":
                         "Nominal Kontrak": st.column_config.NumberColumn("Nominal (Rp)", min_value=0, step=50000, format="Rp %d"),
                         "Periode Kontrak Awal": st.column_config.DateColumn("Mulai Kontrak", format="DD/MM/YYYY"),
                         "Periode Kontrak Akhir": st.column_config.DateColumn("Akhir Kontrak", format="DD/MM/YYYY"),
-                        "Tanggal Penggantian Sticker Panel": st.column_config.DateColumn("Tgl Ganti Sticker / Vinyl", format="DD/MM/YYYY"),  # <-- diubah
+                        "Tanggal Penggantian Sticker Panel": st.column_config.DateColumn("Tgl Ganti Sticker / Vinyl", format="DD/MM/YYYY"),
                         "Nama Vendor": st.column_config.TextColumn("Nama Vendor", width="medium"),
                         "Panel Toko": st.column_config.CheckboxColumn("Panel", width="small"),
                         "Showcase": st.column_config.CheckboxColumn("Showcase", width="small"),
@@ -730,14 +746,16 @@ elif active_menu == "👥 Kelola Data Customer":
                     if not target_indices:
                         st.warning("⚠️ Klik **Centang Semua** atau centang minimal 1 baris pada kolom **Pilih** terlebih dahulu.")
                     else:
-                        full_updated = st.session_state.contracts[COLUMNS].copy()
+                        full_updated = _ensure_columns(st.session_state.contracts)[COLUMNS].copy()  # <-- diubah
                         for orig_idx in edited_df.index:
                             for col in COLUMNS:
-                                full_updated.at[orig_idx, col] = edited_df.at[orig_idx, col]
+                                if orig_idx in full_updated.index and col in edited_df.columns:  # <-- diubah
+                                    full_updated.at[orig_idx, col] = edited_df.at[orig_idx, col]
 
                         val_to_set = pd.Timestamp(bulk_new_val) if bulk_target_col in DATE_COLUMNS else bulk_new_val
                         for orig_idx in target_indices:
-                            full_updated.at[orig_idx, bulk_target_col] = val_to_set
+                            if orig_idx in full_updated.index:  # <-- diubah
+                                full_updated.at[orig_idx, bulk_target_col] = val_to_set
 
                         try:
                             saved_df = save_data(full_updated)
@@ -754,10 +772,11 @@ elif active_menu == "👥 Kelola Data Customer":
                 act_col1.info(f"💡 Terpilih: **{selected_rows_count}** dari **{len(edited_df)}** baris pada hasil pencarian ini.")
 
                 if act_col2.button("💾 Simpan Perubahan Tabel", type="primary", width="stretch", key="btn_save_multi_table"):
-                    full_updated = st.session_state.contracts[COLUMNS].copy()
+                    full_updated = _ensure_columns(st.session_state.contracts)[COLUMNS].copy()  # <-- diubah
                     for orig_idx in edited_df.index:
                         for col in COLUMNS:
-                            full_updated.at[orig_idx, col] = edited_df.at[orig_idx, col]
+                            if orig_idx in full_updated.index and col in edited_df.columns:  # <-- diubah
+                                full_updated.at[orig_idx, col] = edited_df.at[orig_idx, col]
 
                     try:
                         saved_df = save_data(full_updated)
@@ -800,7 +819,7 @@ elif active_menu == "👥 Kelola Data Customer":
             st.info("Belum ada data customer. Silakan tambah customer baru atau import Excel.")
         else:
             record_options = [
-                f"{i} | {safe_text(row['ID Outlet']) or 'Tanpa ID'} — {safe_text(row['Nama Customer']) or 'Tanpa Nama'} ({safe_text(row['Zona']) or '-'})"
+                f"{i} | {safe_text(row.get('ID Outlet', pd.NA)) or 'Tanpa ID'} — {safe_text(row.get('Nama Customer', pd.NA)) or 'Tanpa Nama'} ({safe_text(row.get('Zona', pd.NA)) or '-'})"
                 for i, row in contracts.iterrows()
             ]
             selected_record = st.selectbox(
@@ -812,7 +831,7 @@ elif active_menu == "👥 Kelola Data Customer":
             submitted, updated_record = render_outlet_form(contracts.loc[selected_index], selected_index)
 
             if submitted:
-                updated_data = contracts[COLUMNS].copy()
+                updated_data = _ensure_columns(contracts)[COLUMNS].copy()  # <-- diubah
                 for column, value in updated_record.items():
                     updated_data.at[selected_index, column] = value
                 try:
@@ -839,7 +858,8 @@ elif active_menu == "👥 Kelola Data Customer":
         blank_record = pd.Series({column: pd.NA for column in COLUMNS})
         submitted, new_record = render_outlet_form(blank_record, None)
         if submitted:
-            updated_data = pd.concat([contracts[COLUMNS], pd.DataFrame([new_record])], ignore_index=True)
+            base_contracts = _ensure_columns(contracts)[COLUMNS]  # <-- diubah
+            updated_data = pd.concat([base_contracts, pd.DataFrame([new_record])], ignore_index=True)
             try:
                 saved_df = save_data(updated_data)
                 set_contracts_state(saved_df, already_normalized=True)
@@ -912,16 +932,18 @@ elif active_menu == "👥 Kelola Data Customer":
                     if new_rows.empty:
                         st.warning("Tidak ditemukan baris data valid pada file Excel.")
                     else:
+                        base_contracts = _ensure_columns(contracts)[COLUMNS]  # <-- diubah
+                        new_rows_ensured = _ensure_columns(new_rows)  # <-- diubah
                         existing_keys = {
                             customer_id_key(val)
-                            for val in contracts["ID Outlet"].dropna()
+                            for val in base_contracts["ID Outlet"].dropna()
                             if customer_id_key(val)
                         }
                         skipped_ids: list[str] = []
                         rows_to_add: list[pd.Series] = []
                         seen_batch_keys: set[str] = set()
 
-                        for _, r in new_rows.iterrows():
+                        for _, r in new_rows_ensured.iterrows():
                             k = customer_id_key(r.get("ID Outlet"))
                             if skip_duplicate_id and k:
                                 if k in existing_keys or k in seen_batch_keys:
@@ -933,7 +955,7 @@ elif active_menu == "👥 Kelola Data Customer":
                         if not rows_to_add:
                             st.info(f"Tidak ada data baru ditambahkan ({len(skipped_ids)} ID sudah terdaftar).")
                         else:
-                            combined = pd.concat([contracts[COLUMNS], pd.DataFrame(rows_to_add)], ignore_index=True)
+                            combined = pd.concat([base_contracts, pd.DataFrame(rows_to_add)], ignore_index=True)
                             saved_df = save_data(combined)
                             set_contracts_state(saved_df, already_normalized=True)
                             st.session_state.load_warning = None
@@ -948,8 +970,8 @@ elif active_menu == "👥 Kelola Data Customer":
 # ==========================================
 # HALAMAN 3: PEMESANAN PENGGANTIAN STICKER / VINYL PANEL
 # ==========================================
-elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":  # <-- diubah
-    st.markdown("### 🏷️ Pemesanan Penggantian Sticker / Vinyl Panel")  # <-- diubah
+elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":
+    st.markdown("### 🏷️ Pemesanan Penggantian Sticker / Vinyl Panel")
     st.caption(
         "**ID Outlet** bersifat **opsional** (boleh dikosongkan jika mengisi **Nama Outlet**). "
         "Setiap pemesanan akan di-*lookup* ke **Master Data Dashboard** — jika tidak ditemukan, pemesanan **tidak dapat disimpan**."
@@ -1026,7 +1048,7 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":  # <-- diubah
                 st.session_state["_resolved_outlet_alamat"] = ""
                 st.session_state["sticker_order_alamat"] = ""
 
-        st.markdown("##### Detail Pemesanan Penggantian Sticker / Vinyl Panel")  # <-- diubah
+        st.markdown("##### Detail Pemesanan Penggantian Sticker / Vinyl Panel")
         col_s1, col_s2 = st.columns([1.2, 2.3])
         in_id_outlet = col_s1.text_input("ID Outlet (Opsional)", placeholder="Opsional — contoh: 501X0001", key="sticker_order_id")
         in_nama_outlet = col_s2.text_input(
@@ -1115,14 +1137,14 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":  # <-- diubah
                     st.session_state["_resolved_outlet_alamat"] = ""
                     st.success(
                         f"✅ Lookup cocok dengan Master Data Dashboard: berhasil mengupdate **{upd_cnt}** baris customer "
-                        f"dan mencatat hasil pemesanan sticker / vinyl panel ke log."  # <-- diubah
+                        f"dan mencatat hasil pemesanan sticker / vinyl panel ke log."
                     )
                     st.rerun()
                 except Exception as error:
-                    st.error(f"Gagal menyimpan pemesanan penggantian sticker / vinyl panel: {error}")  # <-- diubah
+                    st.error(f"Gagal menyimpan pemesanan penggantian sticker / vinyl panel: {error}")
 
     with tab_sticker_batch:
-        st.markdown("##### Langkah 1: Download Template Excel Penggantian Sticker / Vinyl Panel")  # <-- diubah
+        st.markdown("##### Langkah 1: Download Template Excel Penggantian Sticker / Vinyl Panel")
         st.caption("Kolom **ID Outlet** pada template bersifat opsional jika **Nama Outlet** diisi, dan keduanya tetap diverifikasi terhadap Master Data Dashboard.")
         sticker_sample = pd.DataFrame([
             {
@@ -1140,7 +1162,7 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":  # <-- diubah
                 "ID Outlet": "S50113D250917120644415",
                 "Nama Outlet": "TOKO CONTOH 2",
                 "Alamat": "JALAN RAYA INTAN P38 BLOK 12D",
-                "Material": "Sticker / Vinyl Panel Toko 1 x 2 m",  # <-- diubah
+                "Material": "Sticker / Vinyl Panel Toko 1 x 2 m",
                 "Brand": "LA LIGHTS",
                 "Version": "Cat Eyes",
                 "Jumlah Sticker / Vinyl": 1,
@@ -1152,15 +1174,15 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":  # <-- diubah
         tpl_col1, tpl_col2 = st.columns(2)
         tpl_col1.download_button(
             "📄 Download Template Kosong (.xlsx)",
-            data=excel_bytes(pd.DataFrame(columns=STICKER_ORDER_COLUMNS), sheet_name="Penggantian Sticker / Vinyl Panel"),  # <-- diubah
-            file_name="Template_Penggantian_Sticker_Vinyl_Panel.xlsx",  # <-- diubah
+            data=excel_bytes(pd.DataFrame(columns=STICKER_ORDER_COLUMNS), sheet_name="Penggantian Sticker / Vinyl Panel"),
+            file_name="Template_Penggantian_Sticker_Vinyl_Panel.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width="stretch",
         )
         tpl_col2.download_button(
             "📝 Download Template + Contoh (.xlsx)",
-            data=excel_bytes(sticker_sample, sheet_name="Penggantian Sticker / Vinyl Panel"),  # <-- diubah
-            file_name="Template_Penggantian_Sticker_Vinyl_Panel_Contoh.xlsx",  # <-- diubah
+            data=excel_bytes(sticker_sample, sheet_name="Penggantian Sticker / Vinyl Panel"),
+            file_name="Template_Penggantian_Sticker_Vinyl_Panel_Contoh.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width="stretch",
         )
@@ -1168,12 +1190,12 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":  # <-- diubah
         st.divider()
         st.markdown("##### Langkah 2: Upload File Excel Penggantian Massal")
         sticker_batch_file = st.file_uploader(
-            "Pilih file Excel (.xlsx) penggantian sticker / vinyl panel",  # <-- diubah
+            "Pilih file Excel (.xlsx) penggantian sticker / vinyl panel",
             type=["xlsx"],
             key="sticker_batch_uploader",
         )
 
-        if st.button("🚀 Proses & Update Massal Sticker / Vinyl Panel", type="primary", key="btn_process_sticker_batch"):  # <-- diubah
+        if st.button("🚀 Proses & Update Massal Sticker / Vinyl Panel", type="primary", key="btn_process_sticker_batch"):
             if sticker_batch_file is None:
                 st.warning("Pilih file Excel terlebih dahulu.")
             else:
@@ -1254,8 +1276,8 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":  # <-- diubah
         dl_ex_col, dl_png_col, clr_chk_col, clr_col = st.columns([1.3, 1.3, 0.9, 1.0])
         dl_ex_col.download_button(
             "📥 Download Log Hasil (.xlsx)",
-            data=excel_bytes(target_export_df, sheet_name="Log Hasil Pemesanan Sticker / Vinyl"),  # <-- diubah
-            file_name=f"Log_Hasil_Pemesanan_Sticker_Vinyl_Panel_{date.today().strftime('%Y%m%d')}.xlsx",  # <-- diubah
+            data=excel_bytes(target_export_df, sheet_name="Log Hasil Pemesanan Sticker / Vinyl"),
+            file_name=f"Log_Hasil_Pemesanan_Sticker_Vinyl_Panel_{date.today().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width="stretch",
         )
@@ -1277,7 +1299,7 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":  # <-- diubah
             st.download_button(
                 "⬇️ Download Gambar Hasil (.png)",
                 data=png_bytes_ready,
-                file_name=f"Hasil_Pemesanan_Sticker_Vinyl_Panel_{date.today().strftime('%Y%m%d')}.png",  # <-- diubah
+                file_name=f"Hasil_Pemesanan_Sticker_Vinyl_Panel_{date.today().strftime('%Y%m%d')}.png",
                 mime="image/png",
                 key="btn_dl_png_ready",
             )
@@ -1461,7 +1483,7 @@ elif active_menu == "📦 List Materi Promosi":
     st.markdown("### 📦 List Materi Promosi di Gudang Promosi")
     st.caption(
         "Menampilkan stok yang berstatus **Available > 0** dan hanya materi yang mengandung "
-        "**`Sticker / Vinyl Panel Toko`**."  # <-- diubah
+        "**`Sticker / Vinyl Panel Toko`**."
     )
 
     with st.expander("📤 Update / Upload File Laporan Gudang Promosi (PRCRG01 .xlsx)", expanded=promo_stock_df.empty):
@@ -1477,14 +1499,14 @@ elif active_menu == "📦 List Materi Promosi":
                     clear_promo_stock_cache()
                     st.session_state.pop("_warehouse_stock_cache", None)
                     st.session_state.promo_stock = parsed_stock
-                    st.success(f"✅ Berhasil memuat **{len(parsed_stock)}** item materi Sticker / Vinyl Panel Toko yang Available.")  # <-- diubah
+                    st.success(f"✅ Berhasil memuat **{len(parsed_stock)}** item materi Sticker / Vinyl Panel Toko yang Available.")
                     st.rerun()
                 except Exception as error:
                     st.error(f"Gagal membaca file stok gudang: {error}")
 
     stock_view = promo_stock_df.copy()
     if stock_view.empty:
-        st.info("Belum ada data materi **Sticker / Vinyl Panel Toko** yang berstatus **Available > 0**.")  # <-- diubah
+        st.info("Belum ada data materi **Sticker / Vinyl Panel Toko** yang berstatus **Available > 0**.")
     else:
         total_avail_qty = int(pd.to_numeric(stock_view["Available"], errors="coerce").sum())
         m_c1, m_c2, m_c3 = st.columns(3)
@@ -1581,7 +1603,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                 try:
                     branding_data = read_branding_workbook(branding_upload)
                     updated, unmatched, duplicates, updated_count = apply_branding_updates(
-                        st.session_state.contracts,
+                        _ensure_columns(st.session_state.contracts),  # <-- diubah
                         branding_data,
                         already_normalized=True,
                     )
@@ -1688,13 +1710,14 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                     "otomatis diambil baris dengan tanggal akhir kontrak terbaru."
                 )
 
+            base_contracts_drp = _ensure_columns(st.session_state.contracts)  # <-- diubah
             mismatch_df, matched_ok_df, missing_df = build_drp_crosscheck_report(
-                st.session_state.contracts,
+                base_contracts_drp,
                 drp_source_df,
                 active_fields,
             )
             dash_only_df = build_dashboard_only_report(
-                st.session_state.contracts,
+                base_contracts_drp,
                 drp_source_df,
             )
 
@@ -1768,7 +1791,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                                 st.warning("Centang minimal satu baris data untuk di-update.")
                             else:
                                 updated_contracts, updated_counter = apply_drp_updates_to_contracts(
-                                    st.session_state.contracts,
+                                    base_contracts_drp,
                                     rows_to_update,
                                     fields_to_apply,
                                     already_normalized=True,
@@ -1848,7 +1871,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                             st.warning("Centang minimal satu baris data untuk ditambahkan ke Dashboard.")
                         else:
                             combined_contracts, added_cnt, skipped_existing = append_missing_drp_to_contracts(
-                                st.session_state.contracts,
+                                base_contracts_drp,
                                 rows_to_insert_raw,
                                 default_sector=default_sector,
                                 default_budget=default_budget,
@@ -1964,7 +1987,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                                 st.rerun()
 
     with tab_panel_sync:
-        st.caption("Mencocokkan ukuran sticker / vinyl panel, brand sticker / vinyl, versi, dan ukuran layar dari sheet DRP berdasarkan ID Customer.")  # <-- diubah
+        st.caption("Mencocokkan ukuran sticker / vinyl panel, brand sticker / vinyl, versi, dan ukuran layar dari sheet DRP berdasarkan ID Customer.")
         sync_upload = st.file_uploader("Upload File Sumber Panel & Layar (.xlsx)", type=["xlsx"], key="sync_panel_screen_upload")
         overwrite_sync = st.checkbox("Timpa nilai yang sudah terisi jika ID Customer cocok", value=False, key="overwrite_panel_screen_sync")
         if st.button("🔗 Hubungkan & Sinkronkan", type="primary", key="btn_sync_panel_screen"):
@@ -1979,7 +2002,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                         sync_upload.seek(0)
                         source_frame = read_workbook(sync_upload)
                     merged_df, updated_cnt, missing_list = merge_panel_screen_by_id(
-                        st.session_state.contracts,
+                        _ensure_columns(st.session_state.contracts),  # <-- diubah
                         source_frame,
                         overwrite_existing=overwrite_sync,
                         already_normalized=True,
@@ -2002,20 +2025,20 @@ elif active_menu == "☁️ Backup & Restore":
     with col_sb:
         with st.container(border=True):
             st.subheader("🗄️ Supabase / Supadata Cloud")
-            st.caption("Simpan snapshot database & log pemesanan sticker / vinyl panel atau pulihkan data terakhir dari cloud.")  # <-- diubah
+            st.caption("Simpan snapshot database & log pemesanan sticker / vinyl panel atau pulihkan data terakhir dari cloud.")
             sb_url, sb_key, sb_table = get_supabase_config()
             if not sb_url or not sb_key:
                 st.warning("Konfigurasi URL dan API key Supabase/Supadata belum diatur di Streamlit Secrets.")
             else:
                 st.info(
                     f"Tabel: `{sb_table}` • Data kontrak: **{len(st.session_state.contracts)}** outlet • "
-                    f"Log pemesanan sticker / vinyl: **{len(st.session_state.sticker_order_results)}** baris"  # <-- diubah
+                    f"Log pemesanan sticker / vinyl: **{len(st.session_state.sticker_order_results)}** baris"
                 )
                 b1, b2 = st.columns(2)
                 if b1.button("⬆️ Backup Sekarang", type="primary", width="stretch", key="btn_backup_supabase"):
                     try:
                         saved_cnt = backup_to_supabase(
-                            st.session_state.contracts,
+                            _ensure_columns(st.session_state.contracts),  # <-- diubah
                             sb_url,
                             sb_key,
                             sb_table,
@@ -2031,7 +2054,7 @@ elif active_menu == "☁️ Backup & Restore":
                 if b2.button("⬇️ Restore Data", type="secondary", width="stretch", key="btn_restore_supabase"):
                     try:
                         restored_df, restored_log = restore_from_supabase(sb_url, sb_key, sb_table)
-                        saved_df = save_data(restored_df)
+                        saved_df = save_data(_ensure_columns(restored_df))  # <-- diubah
                         set_contracts_state(saved_df, already_normalized=True)
                         st.session_state.load_warning = None
                         if restored_log is not None:
@@ -2051,12 +2074,12 @@ elif active_menu == "☁️ Backup & Restore":
             else:
                 st.info(
                     f"Siap mengirim **{len(st.session_state.contracts)}** data outlet & "
-                    f"**{len(st.session_state.sticker_order_results)}** log pemesanan sticker / vinyl."  # <-- diubah
+                    f"**{len(st.session_state.sticker_order_results)}** log pemesanan sticker / vinyl."
                 )
                 if st.button("⬆️ Backup ke Google Sheet", type="primary", width="stretch"):
                     try:
                         row_count = backup_to_google_sheet(
-                            st.session_state.contracts,
+                            _ensure_columns(st.session_state.contracts),  # <-- diubah
                             backup_url,
                             sticker_order_log=st.session_state.sticker_order_results,
                             already_normalized=True,
