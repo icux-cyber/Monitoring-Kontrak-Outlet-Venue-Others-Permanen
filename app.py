@@ -2811,7 +2811,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             f"{ringkasan_baris}\n\n"
             
             "Terima kasih.\n"
-            "Hormat kami
+            "Hormat kami"
             
         )
         mailto_pejabat_url = (
