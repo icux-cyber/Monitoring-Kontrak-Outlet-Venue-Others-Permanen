@@ -602,7 +602,11 @@ def build_drp_crosscheck_report(
         d_row = dash.loc[d_idx]
         diff_cols = [
             col for col in compare_fields
-            if _is_field_different(col, d_row.get(col, pd.NA), drp_row.get(col, pd.NA))
+            if _is_field_different(
+                col,
+                d_row.get(col, pd.NA),
+                drp_row.get("Customer", pd.NA) if col == "Nama Customer" else drp_row.get(col, pd.NA),
+            )
         ]
 
         record = {
@@ -625,6 +629,7 @@ def build_drp_crosscheck_report(
             "Zona (DRP)": _fmt_val_cmp("Zona", drp_row.get("Zona")),
             "Kategori Outlet (Dash)": _fmt_val_cmp("Kategori Outlet", d_row.get("Kategori Outlet")),
             "Kategori Outlet (DRP)": _fmt_val_cmp("Kategori Outlet", drp_row.get("Kategori Outlet")),
+            "_raw_Nama Customer": drp_row.get("Customer", pd.NA),
             "_raw_Brand": drp_row.get("Brand", pd.NA),
             "_raw_Nominal Kontrak": drp_row.get("Nominal Kontrak", pd.NA),
             "_raw_Periode Kontrak Awal": drp_row.get("Periode Kontrak Awal", pd.NA),
@@ -1359,6 +1364,7 @@ elif active_menu == "👥 Kelola Data Customer":
                     bulk_target_col = ba1.selectbox(
                         "Kolom yang Diubah",
                         [
+                            "Nama Customer",
                             "Brand",
                             "Nominal Kontrak",
                             "Periode Kontrak Awal",
@@ -1782,6 +1788,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
         )
 
         available_compare_fields = [
+            "Nama Customer",
             "Brand",
             "Nominal Kontrak",
             "Periode Kontrak Awal",
@@ -1793,7 +1800,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
         selected_compare_fields = st.multiselect(
             "Pilih Kolom yang Dicocokkan",
             options=available_compare_fields,
-            default=["Brand", "Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen"],
+            default=["Nama Customer", "Brand", "Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen"],
             key="drp_compare_fields",
         )
 
