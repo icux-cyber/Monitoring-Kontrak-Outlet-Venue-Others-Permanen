@@ -288,6 +288,21 @@ def reset_multi_edit_state() -> None:
     st.session_state.pop("multi_customer_data_editor", None)
 
 
+def reset_sticker_single_form() -> None:
+    st.session_state["sticker_order_id"] = ""
+    st.session_state["sticker_order_name"] = ""
+    st.session_state["sticker_order_alamat"] = ""
+    st.session_state["sticker_order_material"] = ""
+    st.session_state["sticker_order_brand"] = ""
+    st.session_state["sticker_order_version"] = ""
+    st.session_state["sticker_order_qty"] = 1
+    st.session_state["sticker_order_vendor"] = ""
+    st.session_state["_last_autofill_alamat_key"] = ""
+    st.session_state["_resolved_outlet_found"] = False
+    st.session_state["_resolved_outlet_alamat"] = ""
+    st.session_state["sticker_pick_from_warehouse"] = "— Pilih dari List Materi Promosi Gudang (Available) —"
+
+
 # ==========================================
 # HELPER CACHE & STATE MANAGEMENT
 # ==========================================
@@ -329,6 +344,7 @@ def set_contracts_state(df: pd.DataFrame) -> pd.DataFrame:
     st.session_state.contracts = normalized
     st.session_state.pop("_master_lookup_cache", None)
     st.session_state.pop("sticker_order_png_bytes", None)
+    st.session_state["_last_autofill_alamat_key"] = ""
     return normalized
 
 
@@ -1425,7 +1441,8 @@ def read_branding_workbook(source) -> pd.DataFrame:
     return result
 
 
-def read_drp_crosscheck_workbook(source) -> pd.DataFrame:
+def read_drp_crosscheck_workbook(source) -> tuple[pd.DataFrame, int]:
+    """Membaca file DRP, mengembalikan DataFrame terdeduplikasi per ID Customer beserta jumlah baris duplikat."""
     if hasattr(source, "seek"):
         source.seek(0)
     excel_file = pd.ExcelFile(source, engine="openpyxl")
@@ -1487,7 +1504,22 @@ def read_drp_crosscheck_workbook(source) -> pd.DataFrame:
         result[col] = pd.to_datetime(result[col], errors="coerce", dayfirst=True).dt.tz_localize(None)
 
     result = result[result["ID Customer"].notna()].reset_index(drop=True)
-    return result
+    result["_id_key"] = result["ID Customer"].map(customer_id_key)
+    result = result[result["_id_key"].ne("")].reset_index(drop=True)
+
+    dup_count = int(result.duplicated("_id_key", keep="last").sum())
+    if dup_count > 0:
+        result["_row_order"] = range(len(result))
+        result = (
+            result.sort_values(["Periode Kontrak Akhir", "_row_order"], kind="stable", na_position="first")
+            .drop_duplicates("_id_key", keep="last")
+            .sort_values("_row_order", kind="stable")
+            .drop(columns=["_row_order"], errors="ignore")
+            .reset_index(drop=True)
+        )
+
+    result = result.drop(columns=["_id_key"], errors="ignore")
+    return result, dup_count
 
 
 def _fmt_val_cmp(col: str, val) -> str:
@@ -2812,12 +2844,22 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                 st.session_state["sticker_order_version"] = rec["Version"]
                 st.session_state["sticker_order_qty"] = max(1, min(1, int(rec["Available"])))
 
-        picked_stock_label = st.selectbox(
-            "📦 Referensi List Materi Promosi di Gudang Promosi (Available > 0)",
-            options=stock_labels,
-            key="sticker_pick_from_warehouse",
-            on_change=_on_warehouse_stock_change,
-        )
+        top_stock_col, top_rst_col = st.columns([4, 1])
+        with top_stock_col:
+            picked_stock_label = st.selectbox(
+                "📦 Referensi List Materi Promosi di Gudang Promosi (Available > 0)",
+                options=stock_labels,
+                key="sticker_pick_from_warehouse",
+                on_change=_on_warehouse_stock_change,
+            )
+        with top_rst_col:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            st.button(
+                "🔄 Reset Form",
+                width="stretch",
+                key="btn_reset_sticker_form",
+                on_click=reset_sticker_single_form,
+            )
 
         picked_rec = stock_records.get(picked_stock_label)
         if picked_rec is not None:
@@ -2854,7 +2896,10 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                 )
                 st.session_state["_resolved_outlet_found"] = found_m
                 st.session_state["_resolved_outlet_alamat"] = auto_addr
-                st.session_state["sticker_order_alamat"] = auto_addr if found_m else ""
+                if found_m and auto_addr:
+                    st.session_state["sticker_order_alamat"] = auto_addr
+                elif not found_m:
+                    st.session_state["sticker_order_alamat"] = ""
             else:
                 st.session_state["_resolved_outlet_found"] = False
                 st.session_state["_resolved_outlet_alamat"] = ""
@@ -2880,20 +2925,20 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
         if has_outlet_input and is_outlet_found:
             st.caption(
                 "✅ ID / Nama Outlet cocok dengan Master Data: kolom **Alamat** terisi otomatis "
-                f"(`{resolved_alamat_val or 'Kosong di master — dapat dilengkapi'}`)."
+                f"(`{resolved_alamat_val or 'Kosong di master — silakan lengkapi'}`)."
             )
         elif has_outlet_input and not is_outlet_found:
             st.caption(
                 "⚠️ ID / Nama Outlet belum cocok atau tidak ditemukan di Master Data: "
-                "silakan isi **Alamat** secara manual."
+                "silakan periksa kembali ID/Nama Outlet agar pemesanan dapat disimpan."
             )
 
         in_alamat_outlet = st.text_input(
             "Alamat",
             placeholder=(
-                "Otomatis terisi jika ID / Nama Outlet cocok..."
+                "Otomatis terisi jika ID / Nama Outlet cocok (dapat diedit)..."
                 if is_outlet_found
-                else "Isi Alamat secara manual (jika ID / Nama Outlet tidak ada atau salah)..."
+                else "Isi Alamat..."
             ),
             key="sticker_order_alamat",
         )
@@ -2918,7 +2963,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
         col_s6, col_s7, col_s8 = st.columns([1.0, 1.2, 1.3])
         in_jumlah = col_s6.number_input(
             "Jumlah Sticker / Vinyl",
-            min_value=0,
+            min_value=1,
             step=1,
             key="sticker_order_qty",
         )
@@ -2933,6 +2978,12 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             key="sticker_order_vendor",
         )
 
+        if picked_rec is not None and int(in_jumlah) > int(picked_rec["Available"]):
+            st.warning(
+                f"⚠️ Jumlah pesanan (**{int(in_jumlah)}**) melebihi stok Available di Gudang Promosi "
+                f"(**{picked_rec['Available']} {picked_rec['UOM']}**)."
+            )
+
         st.markdown("")
         submitted_sticker = st.button(
             "💾 Simpan & Update Data Customer",
@@ -2945,7 +2996,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             if not in_id_outlet.strip() and not in_nama_outlet.strip():
                 st.error("⚠️ Isi minimal **ID Outlet** atau **Nama Outlet** untuk melakukan lookup ke Master Data Dashboard.")
             elif not in_alamat_outlet.strip():
-                st.error("⚠️ Kolom **Alamat** wajib diisi (otomatis jika ID/Nama Outlet benar, atau isi manual jika tidak ada/salah).")
+                st.error("⚠️ Kolom **Alamat** wajib diisi.")
             else:
                 matched_check = lookup_master_indices(
                     st.session_state.contracts,
@@ -2981,7 +3032,11 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                         st.session_state.sticker_order_results = append_sticker_order_log(
                             rec_list, st.session_state.sticker_order_results
                         )
-                        st.session_state["_last_autofill_alamat_key"] = ""
+                        st.session_state["sticker_order_id"] = ""
+                        st.session_state["sticker_order_name"] = ""
+                        st.session_state["sticker_order_alamat"] = ""
+                        st.session_state["_resolved_outlet_found"] = False
+                        st.session_state["_resolved_outlet_alamat"] = ""
                         st.success(
                             f"✅ Lookup cocok dengan Master Data Dashboard: berhasil mengupdate **{upd_cnt}** baris customer "
                             f"dan mencatat hasil pemesanan ke log."
@@ -3062,7 +3117,6 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                         st.session_state.sticker_order_results = append_sticker_order_log(
                             rec_list, st.session_state.sticker_order_results
                         )
-                        st.session_state["_last_autofill_alamat_key"] = ""
                         st.success(
                             f"✅ Seluruh baris cocok dengan Master Data Dashboard: **{upd_cnt}** baris customer terupdate "
                             f"(dari **{len(orders_df)}** baris pemesanan) dan tercatat di log."
@@ -3123,7 +3177,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             else (safe_text(first_row.get("Nama Vendor")) or "Semua Vendor")
         )
 
-        dl_ex_col, dl_png_col, clr_col = st.columns([1.4, 1.4, 1])
+        dl_ex_col, dl_png_col, clr_chk_col, clr_col = st.columns([1.3, 1.3, 0.9, 1.0])
         dl_ex_col.download_button(
             "📥 Download Log Hasil (.xlsx)",
             data=excel_bytes(target_export_df, sheet_name="Log Hasil Pemesanan Sticker"),
@@ -3138,9 +3192,16 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                 png_bytes_ready = generate_sticker_order_png(target_export_df, tgl_ringkas, vendor_ringkas)
                 st.session_state["sticker_order_png_bytes"] = png_bytes_ready
 
-        if clr_col.button("🧹 Hapus Semua Log", width="stretch", key="btn_clear_order_session"):
+        confirm_clear_log = clr_chk_col.checkbox("Konfirmasi hapus log", value=False, key="confirm_clear_sticker_log")
+        if clr_col.button(
+            "🧹 Hapus Semua Log",
+            width="stretch",
+            disabled=not confirm_clear_log,
+            key="btn_clear_order_session",
+        ):
             st.session_state.sticker_order_results = save_sticker_order_log([])
             st.session_state.pop("sticker_order_png_bytes", None)
+            st.session_state["confirm_clear_sticker_log"] = False
             st.rerun()
 
         if png_bytes_ready:
@@ -3199,8 +3260,9 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             "Qty",
             "Vendor",
         ]
+        max_email_rows = 15
         table_rows: list[list[str]] = []
-        for idx_r, (_, r) in enumerate(target_export_df.head(20).iterrows(), start=1):
+        for idx_r, (_, r) in enumerate(target_export_df.head(max_email_rows).iterrows(), start=1):
             ukuran_val = safe_text(r.get("Ukuran")) or safe_text(r.get("Material")) or "-"
             table_rows.append([
                 str(idx_r),
@@ -3228,13 +3290,18 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             *(_fmt_email_row(row) for row in table_rows),
             sep_line,
         ])
+        extra_note = (
+            f"\n(Menampilkan {max_email_rows} dari {len(target_export_df)} item; detail lengkap terlampir pada file Excel/PNG)\n"
+            if len(target_export_df) > max_email_rows
+            else ""
+        )
 
         email_subject = f"Pemesanan Penggantian Sticker / Vinyl Panel Toko - {tgl_ringkas}"
         email_body = (
             "Dengan Hormat,\n\n"
             f"Berikut Kami kirimkan pemesanan penggantian Sticker / Vinyl Panel Toko ({len(target_export_df)} item):\n\n"
-            "\n\n"
-            "\n\n"
+            f"{ringkasan_tabel}\n"
+            f"{extra_note}\n"
             "Terima kasih.\n\n"
             "Hormat kami,\n"
         )
@@ -3561,23 +3628,46 @@ elif active_menu == "🔄 Import & Sinkronisasi":
             key="drp_compare_fields",
         )
 
-        if st.button("🚀 Jalankan Crosscheck DRP", type="primary", key="btn_run_drp_crosscheck"):
+        run_col, reset_drp_col = st.columns([3, 1])
+        with run_col:
+            run_drp_clicked = st.button(
+                "🚀 Jalankan Crosscheck DRP",
+                type="primary",
+                width="stretch",
+                key="btn_run_drp_crosscheck",
+            )
+        with reset_drp_col:
+            if st.button("🧹 Reset Hasil DRP", width="stretch", key="btn_reset_drp_crosscheck"):
+                st.session_state.pop("drp_crosscheck_source", None)
+                st.session_state.pop("drp_crosscheck_fields", None)
+                st.session_state.pop("drp_crosscheck_dup_count", None)
+                st.rerun()
+
+        if run_drp_clicked:
             if drp_upload is None:
                 st.warning("Pilih file Excel DRP terlebih dahulu.")
             elif not selected_compare_fields:
                 st.warning("Pilih minimal satu kolom untuk dicocokkan.")
             else:
                 try:
-                    drp_parsed = read_drp_crosscheck_workbook(drp_upload)
+                    drp_parsed, dup_cnt = read_drp_crosscheck_workbook(drp_upload)
                     st.session_state["drp_crosscheck_source"] = drp_parsed
                     st.session_state["drp_crosscheck_fields"] = list(selected_compare_fields)
+                    st.session_state["drp_crosscheck_dup_count"] = dup_cnt
                 except Exception as error:
                     st.error(f"Gagal membaca file DRP: {error}")
 
         drp_source_df = st.session_state.get("drp_crosscheck_source")
         active_fields = st.session_state.get("drp_crosscheck_fields", selected_compare_fields)
+        dup_drp_count = int(st.session_state.get("drp_crosscheck_dup_count", 0))
 
         if drp_source_df is not None and not drp_source_df.empty:
+            if dup_drp_count > 0:
+                st.info(
+                    f"ℹ️ Ditemukan **{dup_drp_count}** baris `ID Customer` duplikat pada file DRP upload — "
+                    "otomatis diambil baris dengan tanggal akhir kontrak terbaru."
+                )
+
             mismatch_df, matched_ok_df, missing_df = build_drp_crosscheck_report(
                 st.session_state.contracts,
                 drp_source_df,
@@ -3590,7 +3680,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
             )
 
             m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Total Data DRP", len(drp_source_df))
+            m1.metric("Total Data DRP (Unik)", len(drp_source_df))
             m2.metric("Sesuai Semua", len(matched_ok_df))
             m3.metric("Tidak Sesuai", len(mismatch_df))
             m4.metric("ID Belum Ada di Dashboard", len(missing_df))
