@@ -933,18 +933,20 @@ def _generate_sticker_order_png_cached(records_json: str, tanggal_order: str, na
 
 
 def generate_sticker_order_png(df_table: pd.DataFrame, tanggal_order: str, nama_vendor: str) -> bytes:
-    payload = df_table.head(100).to_json(orient="records", date_format="iso", force_ascii=False)
+    payload = df_table.drop(columns=["Material"], errors="ignore").head(100).to_json(
+        orient="records", date_format="iso", force_ascii=False
+    )
     return _generate_sticker_order_png_cached(payload, tanggal_order, nama_vendor)
 
 
 def _generate_sticker_order_png_impl(df_table: pd.DataFrame, tanggal_order: str, nama_vendor: str) -> bytes:
-    disp = df_table.copy()
+    disp = df_table.drop(columns=["Material"], errors="ignore").copy()
     if disp.empty:
         disp = pd.DataFrame(
             columns=[
                 "ID Outlet",
                 "Nama Outlet",
-                "Material",
+                "Ukuran",
                 "Brand",
                 "Version",
                 "Jumlah Sticker / Vinyl",
@@ -962,7 +964,7 @@ def _generate_sticker_order_png_impl(df_table: pd.DataFrame, tanggal_order: str,
     col_widths = [w / total_len for w in col_max_lengths]
 
     num_rows = len(disp)
-    fig_width = max(18, len(disp.columns) * 2.1)
+    fig_width = max(16, len(disp.columns) * 2.0)
     fig_height = max(3.6, (num_rows + 3.5) * 0.45)
 
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
@@ -2800,19 +2802,56 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                 cc_list.append(clean_em)
 
         cc_str = "; ".join(cc_list)
-        ringkasan_baris = "\n".join(
-            f"- {r.get('ID Outlet', '-')} | {r.get('Nama Outlet', '-')} | {r.get('Brand', '-')} | {r.get('Version', '-')} | Qty: {r.get('Jumlah Sticker / Vinyl', 0)} | Vendor: {r.get('Nama Vendor', '-')}"
-            for _, r in df_order_hasil.head(20).iterrows()
-        )
+        table_cols = [
+            "No",
+            "ID Outlet",
+            "Nama Outlet",
+            "Ukuran",
+            "Brand",
+            "Version",
+            "Qty",
+            "Vendor",
+        ]
+        table_rows: list[list[str]] = []
+        for idx_r, (_, r) in enumerate(df_order_hasil.head(20).iterrows(), start=1):
+            ukuran_val = safe_text(r.get("Ukuran")) or safe_text(r.get("Material")) or "-"
+            table_rows.append([
+                str(idx_r),
+                safe_text(r.get("ID Outlet")) or "-",
+                safe_text(r.get("Nama Outlet")) or "-",
+                ukuran_val,
+                safe_text(r.get("Brand")) or "-",
+                safe_text(r.get("Version")) or "-",
+                str(r.get("Jumlah Sticker / Vinyl", 0)),
+                safe_text(r.get("Nama Vendor")) or "-",
+            ])
+
+        col_widths = [
+            max(len(col), *(len(row[c_i]) for row in table_rows))
+            for c_i, col in enumerate(table_cols)
+        ]
+
+        def _fmt_email_row(cells: list[str]) -> str:
+            return "| " + " | ".join(cells[i].ljust(col_widths[i]) for i in range(len(table_cols))) + " |"
+
+        sep_line = "+-" + "-+-".join("-" * w for w in col_widths) + "-+"
+        ringkasan_tabel = "\n".join([
+            sep_line,
+            _fmt_email_row(table_cols),
+            sep_line,
+            *(_fmt_email_row(row) for row in table_rows),
+            sep_line,
+        ])
+
         email_subject = f"Pemesanan Penggantian Sticker / Vinyl Panel Toko - {tgl_ringkas}"
         email_body = (
-            "Dengan Hormat,\n\n"
-            f"Berikut kami kirimkan pemesanan penggantian Sticker / Vinyl Panel Toko ({len(df_order_hasil)} item):\n\n"
-            f"{ringkasan_baris}\n\n"
-            
+            "Yth. Bapak/Ibu Pejabat,\n\n"
+            f"Berikut hasil pemesanan penggantian Sticker / Vinyl Panel Toko ({len(df_order_hasil)} item):\n\n"
+            f"{ringkasan_tabel}\n\n"
+            "Mohon lampiran file Excel (.xlsx) dan gambar (.png) yang telah diunduh disertakan pada email ini.\n\n"
             "Terima kasih.\n"
-            "Hormat kami"
-            
+            "Hormat kami,\n"
+            "Eka Sulawestara"
         )
         mailto_pejabat_url = (
             f"mailto:"
