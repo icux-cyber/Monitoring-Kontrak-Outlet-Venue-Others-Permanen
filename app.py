@@ -341,7 +341,7 @@ def normalize_sticker_order_records(records: list[dict] | pd.DataFrame) -> list[
             "Ukuran": safe_text(item.get("Ukuran")) or "-",
             "Brand": safe_text(item.get("Brand")) or "-",
             "Version": safe_text(item.get("Version")) or "-",
-            "Jumlah Sticker / Vinyl": qty_val,
+            "Jumlah Sticker / Vinyl": int(qty_val),
             "Tanggal OrderPenggantian Sticker / Vinyl": (
                 safe_text(item.get("Tanggal OrderPenggantian Sticker / Vinyl"))
                 or date.today().strftime("%d/%m/%Y")
@@ -698,7 +698,7 @@ def _build_warehouse_stock_options(stock_json: str) -> tuple[list[str], dict[str
         m_s = mat_list[idx].strip()
         b_s = brd_list[idx].strip()
         v_s = ver_list[idx].strip()
-        a_i = avail_list[idx]
+        a_i = int(avail_list[idx])
         u_s = uom_list[idx].strip()
         lbl = f"{idx + 1}. {m_s} | {b_s} | {v_s} (Available: {a_i} {u_s})".strip()
         labels.append(lbl)
@@ -927,7 +927,7 @@ def apply_sticker_replacement_orders(
                 "Ukuran": safe_text(size_val) or "-",
                 "Brand": safe_text(brand_val) or "-",
                 "Version": safe_text(version_val) or "-",
-                "Jumlah Sticker / Vinyl": qty_num,
+                "Jumlah Sticker / Vinyl": int(qty_num),
                 "Tanggal OrderPenggantian Sticker / Vinyl": date_val.strftime("%d/%m/%Y") if not pd.isna(date_val) else "-",
                 "Nama Vendor": safe_text(vendor_val) or "-",
                 "Status Kirim Pejabat": "Siap Kirim",
@@ -1023,7 +1023,10 @@ def _generate_sticker_order_png_cached(records_json: str, tanggal_order: str, na
 
 
 def generate_sticker_order_png(df_table: pd.DataFrame, tanggal_order: str, nama_vendor: str) -> bytes:
-    payload = df_table.drop(columns=["ID Outlet", "Material", "Waktu Input", "Alamat", "Zona", "Status Kirim Pejabat"], errors="ignore").head(100).to_json(
+    payload = df_table.drop(
+        columns=["ID Outlet", "Material", "Waktu Input", "Alamat", "Zona", "Status Kirim Pejabat"],
+        errors="ignore",
+    ).head(100).to_json(
         orient="records", date_format="iso", force_ascii=False
     )
     return _generate_sticker_order_png_cached(payload, tanggal_order, nama_vendor)
@@ -1049,15 +1052,15 @@ def _generate_sticker_order_png_impl(df_table: pd.DataFrame, tanggal_order: str,
 
     col_max_chars: list[int] = []
     for col in disp.columns:
-        header_w = len(str(col))
-        sample_vals = [len(line) for v in disp[col].values for line in str(v).splitlines()] or [0]
-        longest_token = max([len(tok) for v in disp[col].values for tok in str(v).split()] or [4])
-        natural_w = max([header_w, *sample_vals, 8])
-        capped_w = min(max(natural_w, min(longest_token + 2, 16)), 42)
+        header_w = int(len(str(col)))
+        sample_vals = [int(len(line)) for v in disp[col].values for line in str(v).splitlines()] or [0]
+        longest_token = int(max([len(tok) for v in disp[col].values for tok in str(v).split()] or [4]))
+        natural_w = int(max([header_w, *sample_vals, 8]))
+        capped_w = int(min(max(natural_w, min(longest_token + 2, 16)), 42))
         col_max_chars.append(capped_w)
 
-    total_chars = sum(col_max_chars) or 1
-    col_widths = [w / total_chars for w in col_max_chars]
+    total_chars = int(sum(col_max_chars)) or 1
+    col_widths = [float(w) / float(total_chars) for w in col_max_chars]
 
     wrapped_rows: list[list[str]] = []
     row_line_counts: list[int] = [1]
@@ -1066,22 +1069,28 @@ def _generate_sticker_order_png_impl(df_table: pd.DataFrame, tanggal_order: str,
         max_lines_in_row = 1
         for c_idx, val in enumerate(row_vals):
             txt = "" if pd.isna(val) else str(val)
-            wrap_width = max(col_max_chars[c_idx], 8)
+            wrap_width = int(max(int(col_max_chars[c_idx]), 8))
             lines: list[str] = []
             for para in (txt.splitlines() or [""]):
-                wrapped = textwrap.wrap(para, width=wrap_width, break_long_words=True, break_hyphens=False)
+                para_str = str(para)
+                wrapped = textwrap.wrap(
+                    para_str,
+                    width=wrap_width,
+                    break_long_words=True,
+                    break_hyphens=False,
+                )
                 lines.extend(wrapped or [""])
             wrapped_cell_lines.append(lines)
             if len(lines) > max_lines_in_row:
                 max_lines_in_row = len(lines)
-        row_line_counts.append(max_lines_in_row)
+        row_line_counts.append(int(max_lines_in_row))
         wrapped_rows.append([
             "\n".join(wrapped_cell_lines[c_idx]) for c_idx in range(len(disp.columns))
         ])
 
-    total_lines = sum(row_line_counts)
-    fig_width = max(14.0, min(28.0, total_chars * 0.135))
-    fig_height = max(3.6, min(36.0, total_lines * 0.34 + 1.8))
+    total_lines = int(sum(row_line_counts))
+    fig_width = float(max(14.0, min(28.0, total_chars * 0.135)))
+    fig_height = float(max(3.6, min(36.0, total_lines * 0.34 + 1.8)))
 
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
     ax.axis("off")
@@ -1109,7 +1118,7 @@ def _generate_sticker_order_png_impl(df_table: pd.DataFrame, tanggal_order: str,
     table.set_fontsize(8.5)
 
     for (row, col), cell in table.get_celld().items():
-        cell.set_width(col_widths[col])
+        cell.set_width(float(col_widths[col]))
         cell.set_edgecolor("#000000")
         cell.set_linewidth(0.8)
         if row == 0:
