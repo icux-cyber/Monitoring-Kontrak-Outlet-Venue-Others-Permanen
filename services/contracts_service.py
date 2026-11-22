@@ -28,14 +28,14 @@ SYNC_PANEL_SCREEN_COLUMNS = [
 DATE_COLUMNS = [
     "Periode Kontrak Awal",
     "Periode Kontrak Akhir",
-    "Tanggal Penggantian Sticker Panel",
+    "Tanggal Penggantian Sticker / Vinyl Panel",  # <-- diubah
 ]
 COLUMNS = [
     "ID Outlet", "Nama Customer", "Alamat", "Zona", "Sektor", "Pos Budget",
     "Kategori Outlet", "Kategori Pekerjaan", "Brand", "Nominal Kontrak",
     "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen", *MATERIAL_COLUMNS,
     "Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Brand Panel", "Versi",
-    "Tanggal Penggantian Sticker Panel", "Nama Vendor",
+    "Tanggal Penggantian Sticker / Vinyl Panel", "Nama Vendor",  # <-- diubah
     "Ukuran Layar", "Brand Layar",
 ]
 CONTENT_COLUMNS = [
@@ -43,7 +43,7 @@ CONTENT_COLUMNS = [
     "Kategori Outlet", "Kategori Pekerjaan", "Brand", "Nominal Kontrak",
     "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen",
     "Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Brand Panel", "Versi",
-    "Tanggal Penggantian Sticker Panel", "Nama Vendor",
+    "Tanggal Penggantian Sticker / Vinyl Panel", "Nama Vendor",  # <-- diubah
     "Ukuran Layar", "Brand Layar",
 ]
 SEARCH_SOURCE_COLUMNS = [
@@ -71,10 +71,13 @@ ALIASES = {
     "Ukuran Panel Toko": ("Ukuran Panel Toko", "Size Panel Toko", "Panel"),
     "Ukuran Sticker Panel Toko": (
         "Ukuran Sticker Panel Toko",
+        "Ukuran Sticker / Vinyl Panel Toko",  # <-- diubah
         "Ukuran Sticker Panel",
+        "Ukuran Sticker / Vinyl Panel",  # <-- diubah
         "Ukuran Sticker",
         "Ukuran Sticker / Vinyl",
         "Ukuran Sticker Panel (diluar Nama Toko)",
+        "Ukuran Sticker / Vinyl Panel (diluar Nama Toko)",  # <-- diubah
         "Ukuran Stiker Panel Toko",
         "Size Sticker Panel Toko",
         "Material",
@@ -82,28 +85,36 @@ ALIASES = {
     "Brand Panel": (
         "Brand Panel",
         "Brand Sticker",
+        "Brand Sticker / Vinyl",  # <-- diubah
         "Brand Planning - Sticker Panel",
+        "Brand Planning - Sticker / Vinyl Panel",  # <-- diubah
         "Merek Panel",
     ),
     "Versi": (
         "Versi",
         "Version",
         "Versi Sticker",
+        "Versi Sticker / Vinyl",  # <-- diubah
         "Versi Panel",
     ),
-    "Tanggal Penggantian Sticker Panel": (
+    "Tanggal Penggantian Sticker / Vinyl Panel": (  # <-- diubah
+        "Tanggal Penggantian Sticker / Vinyl Panel",  # <-- diubah
         "Tanggal Penggantian Sticker Panel",
         "Tanggal OrderPenggantian Sticker / Vinyl",
         "Tanggal Order Penggantian Sticker / Vinyl",
+        "Tanggal Penggantian Terakhir Sticker / Vinyl Panel",  # <-- diubah
         "Tanggal Penggantian Terakhir Sticker Panel",
+        "Tgl Penggantian Sticker / Vinyl Panel",  # <-- diubah
         "Tgl Penggantian Sticker Panel",
         "Tgl Penggantian Terakhir",
         "Tanggal Ganti Sticker",
+        "Tanggal Ganti Sticker / Vinyl",  # <-- diubah
     ),
     "Nama Vendor": (
         "Nama Vendor",
         "Vendor",
         "Nama Vendor Sticker",
+        "Nama Vendor Sticker / Vinyl",  # <-- diubah
     ),
     "Ukuran Layar": ("Ukuran Layar", "Layar", "Materi Layar Toko", "Size Layar"),
     "Brand Layar": ("Brand Layar", "Brand Planning - Layar DRP", "Merek Layar"),
@@ -605,7 +616,8 @@ def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
     priority_cols = [
         "Status Kontrak", "Sisa Hari", "ID Outlet", "Nama Customer",
         "Brand", "Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen",
-        "Ukuran Sticker Panel Toko", "Brand Panel", "Versi", "Tanggal Penggantian Sticker Panel", "Nama Vendor",
+        "Ukuran Sticker Panel Toko", "Brand Panel", "Versi",
+        "Tanggal Penggantian Sticker / Vinyl Panel", "Nama Vendor",  # <-- diubah
         "Zona", "Sektor", "Pos Budget", "Kategori Outlet", "Kategori Pekerjaan",
     ]
     existing_priority = [c for c in priority_cols if c in display_frame.columns]
