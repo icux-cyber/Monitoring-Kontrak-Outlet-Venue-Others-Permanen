@@ -3141,13 +3141,14 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
 
         email_subject = f"Pemesanan Penggantian Sticker / Vinyl Panel Toko - {tgl_ringkas}"
         email_body = (
-            "Yth. Bapak/Ibu Pejabat,\n\n"
-            f"Berikut hasil pemesanan penggantian Sticker / Vinyl Panel Toko ({len(target_export_df)} item):\n\n"
-            f"{ringkasan_tabel}\n\n"
-            "Mohon lampiran file Excel (.xlsx) dan gambar (.png) yang telah diunduh disertakan pada email ini.\n\n"
+            "Dengan Hormat,\n\n"
+            f"Berikut Kami kirimkan pemesanan penggantian Sticker / Vinyl Panel Toko ({len(target_export_df)} item):\n\n"
+            "\n\n"
+            "\n\n"
             "Terima kasih.\n"
+            "\n\n"
             "Hormat kami,\n"
-            "Eka Sulawestara"
+            
         )
         mailto_pejabat_url = (
             f"mailto:"
