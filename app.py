@@ -2687,47 +2687,23 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
     if st.session_state.sticker_order_results:
         df_order_hasil = pd.DataFrame(st.session_state.sticker_order_results)
     else:
-        hist_src = contracts[
-            contracts["Tanggal Penggantian Sticker Panel"].notna()
-            | contracts["Ukuran Sticker Panel Toko"].notna()
-            | contracts["Brand Panel"].notna()
-            | contracts["Versi"].notna()
-            | contracts["Nama Vendor"].notna()
-        ].copy()
-        if hist_src.empty:
-            df_order_hasil = pd.DataFrame(
-                columns=[
-                    "ID Outlet",
-                    "Nama Outlet",
-                    "Zona",
-                    "Material",
-                    "Ukuran",
-                    "Brand",
-                    "Version",
-                    "Jumlah Sticker / Vinyl",
-                    "Tanggal OrderPenggantian Sticker / Vinyl",
-                    "Nama Vendor",
-                ]
-            )
-        else:
-            hist_src = hist_src.sort_values("Tanggal Penggantian Sticker Panel", ascending=False, na_position="last").head(200)
-            df_order_hasil = pd.DataFrame({
-                "ID Outlet": hist_src["ID Outlet"].map(lambda x: safe_text(x) or "-"),
-                "Nama Outlet": hist_src["Nama Customer"].map(lambda x: safe_text(x) or "-"),
-                "Zona": hist_src["Zona"].map(lambda x: safe_text(x) or "-"),
-                "Material": hist_src["Ukuran Sticker Panel Toko"].map(lambda x: f"Sticker / Vinyl Panel Toko {safe_text(x)}" if safe_text(x) else "-"),
-                "Ukuran": hist_src["Ukuran Sticker Panel Toko"].map(lambda x: safe_text(x) or "-"),
-                "Brand": hist_src["Brand Panel"].map(lambda x: safe_text(x) or "-"),
-                "Version": hist_src["Versi"].map(lambda x: safe_text(x) or "-"),
-                "Jumlah Sticker / Vinyl": 1,
-                "Tanggal OrderPenggantian Sticker / Vinyl": pd.to_datetime(
-                    hist_src["Tanggal Penggantian Sticker Panel"], errors="coerce"
-                ).map(lambda d: "" if pd.isna(d) else d.strftime("%d/%m/%Y")),
-                "Nama Vendor": hist_src["Nama Vendor"].map(lambda x: safe_text(x) or "-"),
-            })
+        df_order_hasil = pd.DataFrame(
+            columns=[
+                "ID Outlet",
+                "Nama Outlet",
+                "Zona",
+                "Material",
+                "Ukuran",
+                "Brand",
+                "Version",
+                "Jumlah Sticker / Vinyl",
+                "Tanggal OrderPenggantian Sticker / Vinyl",
+                "Nama Vendor",
+            ]
+        )
 
     if df_order_hasil.empty:
-        st.info("Belum ada hasil pemesanan penggantian sticker / vinyl panel.")
+        st.info("Belum ada hasil pemesanan penggantian sticker / vinyl panel pada sesi ini. Silakan input form atau upload file Excel pemesanan terlebih dahulu.")
     else:
         st.dataframe(df_order_hasil, width="stretch", hide_index=True, height=300)
 
@@ -2845,13 +2821,17 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
 
         email_subject = f"Pemesanan Penggantian Sticker / Vinyl Panel Toko - {tgl_ringkas}"
         email_body = (
-            "Yth. Bapak/Ibu Pejabat,\n\n"
-            f"Berikut hasil pemesanan penggantian Sticker / Vinyl Panel Toko ({len(df_order_hasil)} item):\n\n"
-            f"{ringkasan_tabel}\n\n"
-            "Mohon lampiran file Excel (.xlsx) dan gambar (.png) yang telah diunduh disertakan pada email ini.\n\n"
+            "Dengan Hormat,\n\n"
+            "\n\n"
+            f"Berikut Kami kirimkan data pemesanan penggantian Sticker / Vinyl Panel Toko ({len(df_order_hasil)} item):\n\n"
+            "\n\n"
+            "\n\n"
+            "\n\n"
+            "\n\n"
             "Terima kasih.\n"
-            "Hormat kami,\n"
-            "Eka Sulawestara"
+            "\n\n"
+            "Hormat kami"
+            
         )
         mailto_pejabat_url = (
             f"mailto:"
