@@ -588,6 +588,122 @@ def _load_initial_promo_stock_impl() -> pd.DataFrame:
     )
 
 
+@st.cache_data(show_spinner=False)
+def _build_warehouse_stock_options(stock_json: str) -> tuple[list[str], dict[str, dict]]:
+    default_label = "— Pilih dari List Materi Promosi Gudang (Available) —"
+    labels: list[str] = [default_label]
+    records: dict[str, dict] = {}
+    if not stock_json:
+        return labels, records
+
+    df = pd.read_json(io.StringIO(stock_json))
+    if df.empty:
+        return labels, records
+
+    mat_list = df["Material"].fillna("").astype(str).tolist() if "Material" in df else [""] * len(df)
+    brd_list = df["Brand"].fillna("").astype(str).tolist() if "Brand" in df else [""] * len(df)
+    ver_list = df["Version"].fillna("").astype(str).tolist() if "Version" in df else [""] * len(df)
+    avail_list = (
+        pd.to_numeric(df["Available"], errors="coerce").fillna(0).astype(int).tolist()
+        if "Available" in df
+        else [0] * len(df)
+    )
+    uom_list = df["UOM"].fillna("").astype(str).tolist() if "UOM" in df else [""] * len(df)
+
+    for idx in range(len(df)):
+        m_s = mat_list[idx].strip()
+        b_s = brd_list[idx].strip()
+        v_s = ver_list[idx].strip()
+        a_i = avail_list[idx]
+        u_s = uom_list[idx].strip()
+        lbl = f"{idx + 1}. {m_s} | {b_s} | {v_s} (Available: {a_i} {u_s})".strip()
+        labels.append(lbl)
+        records[lbl] = {
+            "Material": m_s,
+            "Brand": b_s,
+            "Version": v_s,
+            "Available": a_i,
+            "UOM": u_s,
+        }
+    return labels, records
+
+
+def get_warehouse_stock_options(promo_df: pd.DataFrame) -> tuple[list[str], dict[str, dict]]:
+    if promo_df is None or promo_df.empty:
+        return _build_warehouse_stock_options("")
+    keep_cols = [c for c in ["Material", "Brand", "Version", "Available", "UOM"] if c in promo_df.columns]
+    s_json = promo_df[keep_cols].to_json(orient="records", force_ascii=False)
+    return _build_warehouse_stock_options(s_json)
+
+
+@st.cache_data(show_spinner=False)
+def _build_master_lookup_maps(
+    contracts_json: str,
+) -> tuple[dict[str, list[int]], dict[str, list[int]], dict[int, str]]:
+    if not contracts_json:
+        return {}, {}, {}
+    df = pd.read_json(io.StringIO(contracts_json))
+    if df.empty:
+        return {}, {}, {}
+
+    id_map: dict[str, list[int]] = {}
+    name_map: dict[str, list[int]] = {}
+    addr_map: dict[int, str] = {}
+
+    for idx, row in df.iterrows():
+        r_idx = int(idx)
+        k_id = customer_id_key(row.get("ID Outlet"))
+        k_name = normalize_name_key(row.get("Nama Customer"))
+        addr_map[r_idx] = safe_text(row.get("Alamat"))
+        if k_id:
+            id_map.setdefault(k_id, []).append(r_idx)
+        if k_name:
+            name_map.setdefault(k_name, []).append(r_idx)
+
+    return id_map, name_map, addr_map
+
+
+def lookup_master_indices(
+    master_df: pd.DataFrame,
+    id_outlet_val,
+    nama_outlet_val,
+) -> list[int]:
+    if master_df is None or master_df.empty:
+        return []
+    keep_cols = [c for c in ["ID Outlet", "Nama Customer", "Alamat"] if c in master_df.columns]
+    c_json = master_df[keep_cols].to_json(orient="records", force_ascii=False)
+    id_map, name_map, _ = _build_master_lookup_maps(c_json)
+
+    k_id = customer_id_key(id_outlet_val)
+    k_name = normalize_name_key(nama_outlet_val)
+
+    if k_id:
+        if k_id in id_map:
+            return id_map[k_id]
+        if k_name and k_name in name_map:
+            return name_map[k_name]
+        return []
+
+    if k_name and k_name in name_map:
+        return name_map[k_name]
+
+    return []
+
+
+def lookup_master_address_fast(
+    master_df: pd.DataFrame,
+    id_outlet_val,
+    nama_outlet_val,
+) -> tuple[bool, str]:
+    matched = lookup_master_indices(master_df, id_outlet_val, nama_outlet_val)
+    if not matched:
+        return False, ""
+    keep_cols = [c for c in ["ID Outlet", "Nama Customer", "Alamat"] if c in master_df.columns]
+    c_json = master_df[keep_cols].to_json(orient="records", force_ascii=False)
+    _, _, addr_map = _build_master_lookup_maps(c_json)
+    return True, addr_map.get(matched[0], "")
+
+
 def normalize_data(frame: pd.DataFrame) -> pd.DataFrame:
     frame = clean_headers(frame)
     normalized = pd.DataFrame(index=frame.index)
@@ -639,31 +755,6 @@ def normalize_data(frame: pd.DataFrame) -> pd.DataFrame:
     return normalized.loc[has_data.to_numpy(dtype=bool)].reset_index(drop=True)
 
 
-def lookup_master_indices(
-    master_df: pd.DataFrame,
-    id_outlet_val,
-    nama_outlet_val,
-) -> list[int]:
-    k_id = customer_id_key(id_outlet_val)
-    k_name = normalize_name_key(nama_outlet_val)
-
-    id_keys = master_df["ID Outlet"].map(customer_id_key)
-    name_keys = master_df["Nama Customer"].map(normalize_name_key)
-
-    if k_id:
-        matched = [int(idx) for idx, k in id_keys.items() if k == k_id]
-        if matched:
-            return matched
-        if k_name:
-            return [int(idx) for idx, k in name_keys.items() if k == k_name]
-        return []
-
-    if k_name:
-        return [int(idx) for idx, k in name_keys.items() if k == k_name]
-
-    return []
-
-
 def apply_sticker_replacement_orders(
     contracts: pd.DataFrame,
     orders_df: pd.DataFrame,
@@ -673,6 +764,10 @@ def apply_sticker_replacement_orders(
     updated_rows_set: set[int] = set()
     matched_records: list[dict] = []
     unmatched_labels: list[str] = []
+
+    keep_cols = [c for c in ["ID Outlet", "Nama Customer", "Alamat"] if c in target.columns]
+    c_json = target[keep_cols].to_json(orient="records", force_ascii=False)
+    id_map, name_map, _ = _build_master_lookup_maps(c_json)
 
     for _, order in orders_df.iterrows():
         raw_id = order.get("ID Outlet", pd.NA)
@@ -693,7 +788,15 @@ def apply_sticker_replacement_orders(
         if not id_str and not name_str:
             continue
 
-        matched_indices = lookup_master_indices(target, id_str, name_str)
+        k_id = customer_id_key(id_str)
+        k_name = normalize_name_key(name_str)
+        if k_id:
+            matched_indices = id_map.get(k_id) or (name_map.get(k_name, []) if k_name else [])
+        elif k_name:
+            matched_indices = name_map.get(k_name, [])
+        else:
+            matched_indices = []
+
         label = f"ID: {id_str or '-'} | Nama: {name_str or '-'}"
 
         if not matched_indices:
@@ -833,7 +936,7 @@ def _generate_sticker_order_png_cached(records_json: str, tanggal_order: str, na
 
 
 def generate_sticker_order_png(df_table: pd.DataFrame, tanggal_order: str, nama_vendor: str) -> bytes:
-    payload = df_table.to_json(orient="records", date_format="iso", force_ascii=False)
+    payload = df_table.head(100).to_json(orient="records", date_format="iso", force_ascii=False)
     return _generate_sticker_order_png_cached(payload, tanggal_order, nama_vendor)
 
 
@@ -906,7 +1009,7 @@ def _generate_sticker_order_png_impl(df_table: pd.DataFrame, tanggal_order: str,
             )
 
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.15, dpi=250)
+    plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.15, dpi=180)
     plt.close(fig)
     buf.seek(0)
     return buf.getvalue()
@@ -2301,30 +2404,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
     ])
 
     with tab_sticker_single:
-        # Bangun daftar pilihan gudang secara efisien (hindari iterrows pada dataframe besar)
-        stock_labels: list[str] = ["— Pilih dari List Materi Promosi Gudang (Available) —"]
-        stock_records: dict[str, dict] = {}
-        if not promo_stock_df.empty:
-            mat_list = promo_stock_df["Material"].fillna("").astype(str).tolist()
-            brd_list = promo_stock_df["Brand"].fillna("").astype(str).tolist()
-            ver_list = promo_stock_df["Version"].fillna("").astype(str).tolist()
-            avail_list = pd.to_numeric(promo_stock_df["Available"], errors="coerce").fillna(0).astype(int).tolist()
-            uom_list = promo_stock_df["UOM"].fillna("").astype(str).tolist()
-            for idx in range(len(promo_stock_df)):
-                m_s = mat_list[idx].strip()
-                b_s = brd_list[idx].strip()
-                v_s = ver_list[idx].strip()
-                a_i = avail_list[idx]
-                u_s = uom_list[idx].strip()
-                lbl = f"{idx + 1}. {m_s} | {b_s} | {v_s} (Available: {a_i} {u_s})".strip()
-                stock_labels.append(lbl)
-                stock_records[lbl] = {
-                    "Material": m_s,
-                    "Brand": b_s,
-                    "Version": v_s,
-                    "Available": a_i,
-                    "UOM": u_s,
-                }
+        stock_labels, stock_records = get_warehouse_stock_options(promo_stock_df)
 
         def _on_warehouse_stock_change() -> None:
             sel_lbl = st.session_state.get("sticker_pick_from_warehouse", "")
@@ -2349,7 +2429,6 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                 f"**{picked_rec['Material']}** ({picked_rec['Brand']} • {picked_rec['Version']})"
             )
 
-        # Inisialisasi state input form agar auto-fill Alamat berjalan mulus tanpa memicu rerun berat
         for k_def, v_def in (
             ("sticker_order_id", ""),
             ("sticker_order_name", ""),
@@ -2360,30 +2439,28 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             ("sticker_order_qty", 1),
             ("sticker_order_vendor", ""),
             ("_last_autofill_alamat_key", ""),
+            ("_resolved_outlet_found", False),
+            ("_resolved_outlet_alamat", ""),
         ):
             if k_def not in st.session_state:
                 st.session_state[k_def] = v_def
 
-        def _resolve_outlet_alamat(id_txt: str, name_txt: str) -> tuple[bool, str]:
-            matched_idx = lookup_master_indices(st.session_state.contracts, id_txt, name_txt)
-            if not matched_idx:
-                return False, ""
-            first_row = st.session_state.contracts.loc[matched_idx[0]]
-            return True, safe_text(first_row.get("Alamat"))
-
-        # Cek otomatis saat ID Outlet atau Nama Outlet berubah
         cur_id_val = str(st.session_state.get("sticker_order_id", "")).strip()
         cur_name_val = str(st.session_state.get("sticker_order_name", "")).strip()
         lookup_sig = f"{cur_id_val.casefold()}||{cur_name_val.casefold()}"
+
         if lookup_sig != st.session_state.get("_last_autofill_alamat_key", ""):
             st.session_state["_last_autofill_alamat_key"] = lookup_sig
             if cur_id_val or cur_name_val:
-                found_m, auto_addr = _resolve_outlet_alamat(cur_id_val, cur_name_val)
-                if found_m:
-                    st.session_state["sticker_order_alamat"] = auto_addr
-                else:
-                    st.session_state["sticker_order_alamat"] = ""
+                found_m, auto_addr = lookup_master_address_fast(
+                    st.session_state.contracts, cur_id_val, cur_name_val
+                )
+                st.session_state["_resolved_outlet_found"] = found_m
+                st.session_state["_resolved_outlet_alamat"] = auto_addr
+                st.session_state["sticker_order_alamat"] = auto_addr if found_m else ""
             else:
+                st.session_state["_resolved_outlet_found"] = False
+                st.session_state["_resolved_outlet_alamat"] = ""
                 st.session_state["sticker_order_alamat"] = ""
 
         st.markdown("##### Detail Pemesanan Penggantian Sticker")
@@ -2399,13 +2476,9 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             key="sticker_order_name",
         )
 
-        # Evaluasi status pencocokan ID / Nama Outlet untuk Alamat otomatis vs manual
         has_outlet_input = bool(in_id_outlet.strip() or in_nama_outlet.strip())
-        is_outlet_found, resolved_alamat_val = (
-            _resolve_outlet_alamat(in_id_outlet.strip(), in_nama_outlet.strip())
-            if has_outlet_input
-            else (False, "")
-        )
+        is_outlet_found = bool(st.session_state.get("_resolved_outlet_found", False)) if has_outlet_input else False
+        resolved_alamat_val = str(st.session_state.get("_resolved_outlet_alamat", "")) if is_outlet_found else ""
 
         if has_outlet_input and is_outlet_found:
             st.caption(
@@ -2509,6 +2582,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                         st.session_state.contracts = updated_df
                         st.session_state.load_warning = None
                         st.session_state.sticker_order_results = rec_list + st.session_state.sticker_order_results
+                        st.session_state["_last_autofill_alamat_key"] = ""
                         st.success(
                             f"✅ Lookup cocok dengan Master Data Dashboard: berhasil mengupdate **{upd_cnt}** baris customer "
                             f"dan menambahkan hasil pemesanan ke tabel di bawah."
@@ -2587,6 +2661,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                         st.session_state.contracts = updated_df
                         st.session_state.load_warning = None
                         st.session_state.sticker_order_results = rec_list + st.session_state.sticker_order_results
+                        st.session_state["_last_autofill_alamat_key"] = ""
                         st.success(
                             f"✅ Seluruh baris cocok dengan Master Data Dashboard: **{upd_cnt}** baris customer terupdate "
                             f"(dari **{len(orders_df)}** baris pemesanan)."
@@ -2627,7 +2702,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                 ]
             )
         else:
-            hist_src = hist_src.sort_values("Tanggal Penggantian Sticker Panel", ascending=False, na_position="last")
+            hist_src = hist_src.sort_values("Tanggal Penggantian Sticker Panel", ascending=False, na_position="last").head(200)
             df_order_hasil = pd.DataFrame({
                 "ID Outlet": hist_src["ID Outlet"].map(lambda x: safe_text(x) or "-"),
                 "Nama Outlet": hist_src["Nama Customer"].map(lambda x: safe_text(x) or "-"),
@@ -2651,10 +2726,6 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
         first_row = df_order_hasil.iloc[0]
         tgl_ringkas = safe_text(first_row.get("Tanggal OrderPenggantian Sticker / Vinyl")) or date.today().strftime("%d/%m/%Y")
         vendor_ringkas = safe_text(first_row.get("Nama Vendor")) or "Semua Vendor"
-        png_hasil = generate_sticker_order_png(df_order_hasil, tgl_ringkas, vendor_ringkas)
-
-        with st.expander("🖼️ Preview Hasil Gambar Pemesanan (.PNG)", expanded=False):
-            st.image(png_hasil, caption="Hasil Pemesanan Penggantian Sticker / Vinyl Panel", width="stretch")
 
         dl_ex_col, dl_png_col, clr_col = st.columns([1.4, 1.4, 1])
         dl_ex_col.download_button(
@@ -2664,16 +2735,28 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width="stretch",
         )
-        dl_png_col.download_button(
-            "🖼️ Download Hasil (.png)",
-            data=png_hasil,
-            file_name=f"Hasil_Pemesanan_Sticker_Panel_{date.today().strftime('%Y%m%d')}.png",
-            mime="image/png",
-            width="stretch",
-        )
+
+        png_bytes_ready = st.session_state.get("sticker_order_png_bytes")
+        if dl_png_col.button("🖼️ Siapkan / Download Gambar (.png)", width="stretch", key="btn_prep_png"):
+            with st.spinner("Menghasilkan gambar .PNG..."):
+                png_bytes_ready = generate_sticker_order_png(df_order_hasil, tgl_ringkas, vendor_ringkas)
+                st.session_state["sticker_order_png_bytes"] = png_bytes_ready
+
         if clr_col.button("🧹 Reset Daftar Sesi Ini", width="stretch", key="btn_clear_order_session"):
             st.session_state.sticker_order_results = []
+            st.session_state.pop("sticker_order_png_bytes", None)
             st.rerun()
+
+        if png_bytes_ready:
+            st.download_button(
+                "⬇️ Simpan File Gambar (.png)",
+                data=png_bytes_ready,
+                file_name=f"Hasil_Pemesanan_Sticker_Panel_{date.today().strftime('%Y%m%d')}.png",
+                mime="image/png",
+                key="btn_dl_png_ready",
+            )
+            with st.expander("🖼️ Preview Hasil Gambar Pemesanan (.PNG)", expanded=True):
+                st.image(png_bytes_ready, caption="Hasil Pemesanan Penggantian Sticker / Vinyl Panel", width="stretch")
 
         st.markdown("#### ✉️ Kirim Hasil Pemesanan ke Pejabat")
         daftar_pejabat = st.session_state.pejabat_emails
@@ -2767,6 +2850,7 @@ elif active_menu == "📦 List Materi Promosi":
                     DATA_DIR.mkdir(parents=True, exist_ok=True)
                     parsed_stock.to_excel(PROMO_STOCK_FILE, sheet_name="PRCRG01", index=False, engine="openpyxl")
                     _cached_initial_promo_stock.clear()
+                    _build_warehouse_stock_options.clear()
                     st.session_state.promo_stock = parsed_stock
                     st.success(f"✅ Berhasil memuat **{len(parsed_stock)}** item materi Sticker/Vinyl Panel Toko yang Available.")
                     st.rerun()
@@ -2855,6 +2939,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                             save_data(imported)
                             st.session_state.contracts = imported
                             st.session_state.load_warning = None
+                            _build_master_lookup_maps.clear()
                             st.success(f"✅ Berhasil mengimpor {len(imported)} baris data.")
                             st.rerun()
                     except Exception as error:
@@ -2891,6 +2976,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                         if updated_count:
                             save_data(updated)
                             st.session_state.contracts = updated
+                            _build_master_lookup_maps.clear()
                         unmatched_has_id = unmatched["ID Customer"].map(customer_id_key).ne("")
                         st.session_state.branding_import_result = {
                             "duplicate_ids": int(duplicates["ID Customer"].nunique()),
@@ -3084,6 +3170,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                                 else:
                                     save_data(updated_contracts)
                                     st.session_state.contracts = normalize_data(updated_contracts)
+                                    _build_master_lookup_maps.clear()
                                     st.success(f"✅ Berhasil meng-update {updated_counter} outlet di Dashboard sesuai data DRP!")
                                     st.rerun()
 
@@ -3221,6 +3308,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                                 else:
                                     save_data(combined_contracts)
                                     st.session_state.contracts = normalize_data(combined_contracts)
+                                    _build_master_lookup_maps.clear()
                                     msg = f"✅ Berhasil menambahkan {len(new_records)} outlet baru ke Dashboard!"
                                     if skipped_existing:
                                         msg += f" ({skipped_existing} ID dilewati karena sudah ada)."
@@ -3249,6 +3337,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                     )
                     save_data(merged_df)
                     st.session_state.contracts = merged_df
+                    _build_master_lookup_maps.clear()
                     st.success(f"✅ Sinkronisasi selesai: {updated_cnt} baris customer diperbarui.")
                     if missing_list:
                         st.info(f"{len(missing_list)} ID tidak ditemukan: {', '.join(missing_list[:15])}")
@@ -3289,6 +3378,7 @@ elif active_menu == "☁️ Backup & Restore":
                             save_data(restored_df)
                             st.session_state.contracts = restored_df
                             st.session_state.load_warning = None
+                            _build_master_lookup_maps.clear()
                             st.success(f"✅ {len(restored_df)} baris dipulihkan.")
                             st.rerun()
                     except Exception as error:
