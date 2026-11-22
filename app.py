@@ -1471,12 +1471,20 @@ def _is_field_different(col: str, dash_val, drp_val) -> bool:
     return d_str != r_str
 
 
+def _is_drp_job_category(val) -> bool:
+    txt = safe_text(val).casefold()
+    if not txt:
+        return False
+    return bool(re.search(r"\bdrp\b", txt))
+
+
 def build_drp_crosscheck_report(
     contracts: pd.DataFrame,
     drp_df: pd.DataFrame,
     compare_fields: list[str],
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    dash = normalize_data(contracts)
+    dash_all = normalize_data(contracts)
+    dash = dash_all[dash_all["Kategori Pekerjaan"].map(_is_drp_job_category)].copy()
     dash_keys = dash["ID Outlet"].map(customer_id_key)
     key_to_dash_idx: dict[str, int] = {}
     for idx, k in dash_keys.items():
@@ -1553,7 +1561,7 @@ def build_dashboard_only_report(
     contracts: pd.DataFrame,
     drp_df: pd.DataFrame,
 ) -> pd.DataFrame:
-    dash = normalize_data(contracts).reset_index(drop=True)
+    dash_all = normalize_data(contracts).reset_index(drop=True)
     drp_keys = {
         customer_id_key(val)
         for val in drp_df.get("ID Customer", pd.Series(dtype="object")).dropna()
@@ -1561,7 +1569,9 @@ def build_dashboard_only_report(
     }
 
     rows = []
-    for idx, d_row in dash.iterrows():
+    for idx, d_row in dash_all.iterrows():
+        if not _is_drp_job_category(d_row.get("Kategori Pekerjaan")):
+            continue
         raw_id = safe_text(d_row.get("ID Outlet"))
         k = customer_id_key(raw_id)
         if not k or k not in drp_keys:
@@ -3483,8 +3493,9 @@ elif active_menu == "🔄 Import & Sinkronisasi":
     with tab_drp_crosscheck:
         st.markdown("#### 🔎 Crosscheck Data DRP dengan Dashboard & Monitoring")
         st.caption(
-            "Unggah file Excel DRP (contoh: `CODPR03 (DRP).xlsx`) untuk mencocokkan data berdasarkan **ID Customer**, "
-            "memperbarui data yang tidak sesuai, dan menambahkan data yang belum ada ke Dashboard."
+            "Unggah file Excel DRP (contoh: `CODPR03 (DRP).xlsx`) untuk mencocokkan **khusus outlet dengan Kategori Pekerjaan = DRP** "
+            "(DRP vs DRP) berdasarkan **ID Customer**, memperbarui data yang tidak sesuai, menambahkan data yang belum ada, "
+            "dan mengelola data DRP di Dashboard yang tidak ada di file upload."
         )
 
         drp_upload = st.file_uploader(
@@ -3795,10 +3806,10 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                 if dash_only_df.empty:
                     st.success("✅ Semua data di Dashboard & Monitoring sudah ada pada file DRP yang di-upload.")
                 else:
-                    st.markdown("**Data Ada di Dashboard & Monitoring, tetapi Tidak Ada di Menu Upload (File DRP)**")
+                    st.markdown("**Data Kategori Pekerjaan DRP di Dashboard & Monitoring, tetapi Tidak Ada di File Upload DRP**")
                     st.caption(
-                        "Anda dapat **menghapus sebagian (per row)** dengan mencentang kolom **Pilih Hapus**, "
-                        "atau **menghapus semua** data yang tidak ada di file upload DRP."
+                        "Hanya menampilkan outlet dengan **Kategori Pekerjaan = DRP** yang ada di Dashboard tetapi tidak ada di file upload DRP. "
+                        "Anda dapat **menghapus sebagian (per row)** dengan mencentang **Pilih Hapus** atau **menghapus semua**."
                     )
 
                     only_no_id_filter = st.checkbox(
