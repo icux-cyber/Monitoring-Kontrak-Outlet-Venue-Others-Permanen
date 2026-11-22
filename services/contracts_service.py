@@ -613,13 +613,11 @@ def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
     for column in MATERIAL_COLUMNS:
         if column in display_frame:
             display_frame[column] = display_frame[column].map(lambda checked: "✅" if parse_tickmark(checked) else "—")
-    priority_cols = [
-        "Status Kontrak", "Sisa Hari", "ID Outlet", "Nama Customer",
-        "Brand", "Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen",
-        "Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Brand Panel", "Versi",  # <-- diubah
-        "Tanggal Penggantian Sticker / Vinyl Panel", "Nama Vendor",
-        "Zona", "Sektor", "Pos Budget", "Kategori Outlet", "Kategori Pekerjaan",
-    ]
-    existing_priority = [c for c in priority_cols if c in display_frame.columns]
-    remaining_cols = [c for c in display_frame.columns if c not in existing_priority]
-    return display_frame[existing_priority + remaining_cols]
+    ordered_cols = [
+        "Status Kontrak",
+        "Sisa Hari",
+        *COLUMNS,
+    ]  # <-- diubah
+    existing_ordered = [c for c in ordered_cols if c in display_frame.columns]  # <-- diubah
+    remaining_cols = [c for c in display_frame.columns if c not in existing_ordered]  # <-- diubah
+    return display_frame[existing_ordered + remaining_cols]
