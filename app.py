@@ -14,7 +14,9 @@ import streamlit as st
 # KONFIGURASI HALAMAN & KONSTANTA
 # ==========================================
 APP_TITLE = "Monitoring Kontrak Outlet"
-DATA_FILE = Path("data") / "DRP & Outlet MCD - DSO Surabaya Barat.xlsx"
+DATA_DIR = Path("data")
+DATA_FILE = DATA_DIR / "DRP & Outlet MCD - DSO Surabaya Barat.xlsx"
+PROMO_STOCK_FILE = DATA_DIR / "PRCRG01_Gudang_Promosi.xlsx"
 SHEET_NAME = "Monitoring Kontrak Outlet"
 DRP_SHEET_NAME = "Pemesanan Layar DRP"
 
@@ -352,6 +354,141 @@ def normalize_name_key(value) -> str:
     return text
 
 
+def is_sticker_or_vinyl_panel_toko(value) -> bool:
+    if pd.isna(value):
+        return False
+    return bool(
+        re.search(
+            r"\b(?:sticker|stiker|vinyl)\s+panel\s+toko\b",
+            str(value).strip(),
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def read_promo_stock_workbook(source) -> pd.DataFrame:
+    """
+    Membaca laporan stok Gudang Promosi (PRCRG01) dan menyaring:
+    - Stok Available > 0
+    - Material mengandung 'Sticker Panel Toko' dan/atau 'Vinyl Panel Toko'
+    """
+    if hasattr(source, "seek"):
+        source.seek(0)
+
+    excel_file = pd.ExcelFile(source)
+    sheet = "PRCRG01" if "PRCRG01" in excel_file.sheet_names else excel_file.sheet_names[0]
+
+    if hasattr(source, "seek"):
+        source.seek(0)
+    raw = pd.read_excel(source, sheet_name=sheet, header=None)
+    if raw.empty:
+        return pd.DataFrame(
+            columns=["Storage Location", "Material Group", "Material", "Brand", "Version", "Available", "UOM", "Status Material"]
+        )
+
+    header_row_idx = None
+    for r_idx in range(min(len(raw), 15)):
+        row_vals = [str(v).strip().casefold() for v in raw.iloc[r_idx].tolist() if pd.notna(v)]
+        if "material" in row_vals and ("brand" in row_vals or "version" in row_vals):
+            header_row_idx = r_idx
+            break
+
+    if header_row_idx is not None:
+        h_top = raw.iloc[header_row_idx].ffill()
+        h_sub = raw.iloc[header_row_idx + 1] if header_row_idx + 1 < len(raw) else pd.Series(index=raw.columns)
+        col_names = []
+        for top_v, sub_v in zip(h_top, h_sub):
+            s_top = "" if pd.isna(top_v) else str(top_v).strip()
+            s_sub = "" if pd.isna(sub_v) else str(sub_v).strip()
+            if s_top and s_sub and s_top.casefold() != s_sub.casefold():
+                col_names.append(f"{s_top} - {s_sub}")
+            elif s_sub:
+                col_names.append(s_sub)
+            else:
+                col_names.append(s_top)
+
+        data_df = raw.iloc[header_row_idx + 2:].copy()
+        data_df.columns = col_names
+        data_df = data_df.dropna(how="all").reset_index(drop=True)
+        lowered = {c.casefold(): c for c in data_df.columns}
+
+        def pick_col(*candidates):
+            for cand in candidates:
+                if cand.casefold() in lowered:
+                    return data_df[lowered[cand.casefold()]]
+            return pd.Series(pd.NA, index=data_df.index)
+
+        out = pd.DataFrame({
+            "Storage Location": pick_col("Storage Location"),
+            "Material Group": pick_col("Material Group"),
+            "Material": pick_col("Material"),
+            "Brand": pick_col("Brand"),
+            "Version": pick_col("Version", "Versi"),
+            "Available": pick_col("Stock Type - Available", "Available"),
+            "UOM": pick_col("Stock Type - UOM", "UOM"),
+            "Status Material": pick_col("Status Material"),
+        })
+    else:
+        if hasattr(source, "seek"):
+            source.seek(0)
+        simple_df = clean_headers(pd.read_excel(source, sheet_name=sheet, header=0))
+        lowered = {c.casefold(): c for c in simple_df.columns}
+
+        def pick_simple(*candidates):
+            for cand in candidates:
+                if cand.casefold() in lowered:
+                    return simple_df[lowered[cand.casefold()]]
+            return pd.Series(pd.NA, index=simple_df.index)
+
+        out = pd.DataFrame({
+            "Storage Location": pick_simple("Storage Location"),
+            "Material Group": pick_simple("Material Group"),
+            "Material": pick_simple("Material"),
+            "Brand": pick_simple("Brand"),
+            "Version": pick_simple("Version", "Versi"),
+            "Available": pick_simple("Available", "Stock Type - Available", "Jumlah Sticker / Vinyl"),
+            "UOM": pick_simple("UOM"),
+            "Status Material": pick_simple("Status Material"),
+        })
+
+    for col in ("Storage Location", "Material Group", "Material", "Brand", "Version", "UOM", "Status Material"):
+        out[col] = out[col].astype("string").str.strip()
+        out[col] = out[col].replace({"": pd.NA, "<NA>": pd.NA, "nan": pd.NA, "None": pd.NA})
+
+    out["Available"] = pd.to_numeric(out["Available"], errors="coerce").fillna(0)
+    out = out[
+        out["Material"].notna()
+        & (out["Available"] > 0)
+        & out["Material"].map(is_sticker_or_vinyl_panel_toko)
+    ].reset_index(drop=True)
+    return out
+
+
+def load_initial_promo_stock() -> pd.DataFrame:
+    if PROMO_STOCK_FILE.exists():
+        try:
+            return read_promo_stock_workbook(PROMO_STOCK_FILE)
+        except Exception:
+            pass
+    default_candidates = [
+        Path("PRCRG01 - 2026-11-19T083353.650.xlsx"),
+        Path(__file__).resolve().parent / "PRCRG01 - 2026-11-19T083353.650.xlsx",
+    ]
+    for candidate in default_candidates:
+        if candidate.exists():
+            try:
+                df = read_promo_stock_workbook(candidate)
+                if not df.empty:
+                    DATA_DIR.mkdir(parents=True, exist_ok=True)
+                    df.to_excel(PROMO_STOCK_FILE, sheet_name="PRCRG01", index=False, engine="openpyxl")
+                return df
+            except Exception:
+                continue
+    return pd.DataFrame(
+        columns=["Storage Location", "Material Group", "Material", "Brand", "Version", "Available", "UOM", "Status Material"]
+    )
+
+
 def normalize_data(frame: pd.DataFrame) -> pd.DataFrame:
     frame = clean_headers(frame)
     normalized = pd.DataFrame(index=frame.index)
@@ -554,10 +691,10 @@ def read_sticker_order_excel(source) -> pd.DataFrame:
     has_any = df[["ID Outlet", "Nama Outlet", "Material", "Brand", "Version", "Nama Vendor"]].notna().any(axis=1)
     df = df.loc[has_any.to_numpy(dtype=bool)].reset_index(drop=True)
 
-    missing_name_mask = df["Nama Outlet"].isna()
-    if missing_name_mask.any():
-        bad_rows = [str(i + 2) for i in df.index[missing_name_mask]]
-        raise ValueError(f"Kolom 'Nama Outlet' wajib diisi pada baris Excel: {', '.join(bad_rows)}.")
+    missing_id_mask = df["ID Outlet"].isna()
+    if missing_id_mask.any():
+        bad_rows = [str(i + 2) for i in df.index[missing_id_mask]]
+        raise ValueError(f"Kolom 'ID Outlet' wajib diisi pada baris Excel: {', '.join(bad_rows)}.")
 
     return df
 
@@ -1188,7 +1325,7 @@ def save_data(frame: pd.DataFrame) -> None:
     if errors:
         raise ValueError("\n".join(errors))
     normalized = normalize_data(frame)
-    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     normalized.to_excel(DATA_FILE, sheet_name=SHEET_NAME, index=False, engine="openpyxl")
 
 
@@ -1297,10 +1434,14 @@ if "contracts" not in st.session_state:
     st.session_state.contracts = initial
     st.session_state.load_warning = warning
 
+if "promo_stock" not in st.session_state:
+    st.session_state.promo_stock = load_initial_promo_stock()
+
 if "multi_select_all_state" not in st.session_state:
     st.session_state.multi_select_all_state = False
 
 contracts = add_contract_status(st.session_state.contracts)
+promo_stock_df = st.session_state.promo_stock
 expired_count = int(contracts["Status Kontrak"].eq("🔴 Expired").sum())
 critical_count = int(contracts["Status Kontrak"].eq("🟠 Kritis (≤ 30 hari)").sum())
 warning_count = int(contracts["Status Kontrak"].eq("🟡 Warning (31–90 hari)").sum())
@@ -1319,6 +1460,7 @@ with st.sidebar:
             "📊 Dashboard & Monitoring",
             "👥 Kelola Data Customer",
             "🏷️ Pemesanan Sticker Panel",
+            "📦 List Materi Promosi",
             "🔄 Import & Sinkronisasi",
             "☁️ Backup & Restore",
         ],
@@ -1331,6 +1473,7 @@ with st.sidebar:
     st.write(f"• **Total Outlet:** `{len(contracts):,}`".replace(",", "."))
     st.write(f"• **Kritis (≤30 hr):** `{critical_count}`")
     st.write(f"• **Expired:** `{expired_count}`")
+    st.write(f"• **Stok Sticker/Vinyl Ready:** `{len(promo_stock_df)}`")
 
     st.divider()
     st.download_button(
@@ -1938,10 +2081,8 @@ elif active_menu == "👥 Kelola Data Customer":
 elif active_menu == "🏷️ Pemesanan Sticker Panel":
     st.markdown("### 🏷️ Pemesanan Penggantian Sticker Panel")
     st.caption(
-        "Catat pemesanan penggantian sticker panel secara satuan maupun massal (Excel). "
-        "Kolom **Material** hanya akan dibaca dimensinya saja (contoh: `Vinyl Panel Toko 1 x 2 m (BL)` → `1 x 2 m`), "
-        "lalu ukuran sticker, **Brand**, **Version**, **Tanggal OrderPenggantian Sticker / Vinyl**, dan **Nama Vendor** "
-        "langsung terupdate ke **Semua Data Customer Terfilter**."
+        "**ID Outlet** wajib diisi, sedangkan **Nama Outlet** opsional. "
+        "Materi dapat dipilih langsung dari **List Materi Promosi di Gudang Promosi** (yang berstatus `Available > 0` untuk `Sticker Panel Toko` / `Vinyl Panel Toko`)."
     )
 
     tab_sticker_single, tab_sticker_batch = st.tabs([
@@ -1950,35 +2091,68 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
     ])
 
     with tab_sticker_single:
+        stock_options_map: dict[str, pd.Series] = {}
+        if not promo_stock_df.empty:
+            for idx, s_row in promo_stock_df.iterrows():
+                mat_txt = safe_text(s_row.get("Material"))
+                brd_txt = safe_text(s_row.get("Brand"))
+                ver_txt = safe_text(s_row.get("Version"))
+                avail_num = int(pd.to_numeric(s_row.get("Available"), errors="coerce") or 0)
+                uom_txt = safe_text(s_row.get("UOM"))
+                label = f"{idx + 1}. {mat_txt} | {brd_txt} | {ver_txt} (Available: {avail_num} {uom_txt})".strip()
+                stock_options_map[label] = s_row
+
+        select_choices = ["— Pilih dari List Materi Promosi Gudang (Available) —"] + list(stock_options_map.keys())
+        picked_stock_label = st.selectbox(
+            "📦 Referensi List Materi Promosi di Gudang Promosi (Available > 0)",
+            options=select_choices,
+            key="sticker_pick_from_warehouse",
+        )
+
+        picked_row = stock_options_map.get(picked_stock_label)
+        default_material = safe_text(picked_row.get("Material")) if picked_row is not None else ""
+        default_brand = safe_text(picked_row.get("Brand")) if picked_row is not None else ""
+        default_version = safe_text(picked_row.get("Version")) if picked_row is not None else ""
+        default_avail = int(pd.to_numeric(picked_row.get("Available"), errors="coerce") or 1) if picked_row is not None else 1
+
+        if picked_row is not None:
+            st.info(
+                f"Stok tersedia di Gudang Promosi: **{default_avail} {safe_text(picked_row.get('UOM'))}** — "
+                f"**{default_material}** ({default_brand} • {default_version})"
+            )
+
         with st.form("form_pemesanan_sticker_panel", border=True):
             st.markdown("##### Detail Pemesanan Penggantian Sticker")
             col_s1, col_s2 = st.columns([1.2, 2.3])
             in_id_outlet = col_s1.text_input(
-                "ID Outlet",
-                placeholder="Opsional — contoh: 501X0001",
+                "ID Outlet *",
+                placeholder="Wajib diisi — contoh: 501X0001",
                 key="sticker_order_id",
             )
             in_nama_outlet = col_s2.text_input(
-                "Nama Outlet *",
-                placeholder="Wajib diisi — contoh: TOKO CONTOH 1",
+                "Nama Outlet (Opsional)",
+                placeholder="Opsional — contoh: TOKO CONTOH 1",
                 key="sticker_order_name",
             )
 
             col_s3, col_s4, col_s5 = st.columns([1.6, 1.3, 1.4])
-            in_material = col_s3.text_input(
+            in_material = st.text_input if False else col_s3.text_input(
                 "Material",
-                placeholder="Contoh: Vinyl Panel Toko 1 x 2 m (BL) atau 1 x 2 m",
-                key="sticker_order_material",
+                value=default_material,
+                placeholder="Contoh: Vinyl Panel Toko 1 x 2 m (BL)",
+                key=f"sticker_order_material_{picked_stock_label}",
             )
             in_brand = col_s4.text_input(
                 "Brand",
+                value=default_brand,
                 placeholder="Contoh: DJARUM BLACK MATCHA KRETEK",
-                key="sticker_order_brand",
+                key=f"sticker_order_brand_{picked_stock_label}",
             )
             in_version = col_s5.text_input(
                 "Version",
+                value=default_version,
                 placeholder="Opsional — contoh: Matcha Powder - Rp 17.000/12 btg",
-                key="sticker_order_version",
+                key=f"sticker_order_version_{picked_stock_label}",
             )
 
             col_s6, col_s7, col_s8 = st.columns([1.0, 1.2, 1.3])
@@ -1986,8 +2160,8 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                 "Jumlah Sticker / Vinyl",
                 min_value=0,
                 step=1,
-                value=1,
-                key="sticker_order_qty",
+                value=min(1, default_avail) if picked_row is not None else 1,
+                key=f"sticker_order_qty_{picked_stock_label}",
             )
             in_tgl_order = col_s7.date_input(
                 "Tanggal OrderPenggantian Sticker / Vinyl",
@@ -2008,12 +2182,12 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             )
 
         if submitted_sticker:
-            if not in_nama_outlet.strip():
-                st.error("⚠️ **Nama Outlet** wajib diisi.")
+            if not in_id_outlet.strip():
+                st.error("⚠️ **ID Outlet** wajib diisi.")
             else:
                 order_row = pd.DataFrame([{
-                    "ID Outlet": in_id_outlet.strip() or pd.NA,
-                    "Nama Outlet": in_nama_outlet.strip(),
+                    "ID Outlet": in_id_outlet.strip(),
+                    "Nama Outlet": in_nama_outlet.strip() or pd.NA,
                     "Material": in_material.strip() or pd.NA,
                     "Brand": in_brand.strip() or pd.NA,
                     "Version": in_version.strip() or pd.NA,
@@ -2027,8 +2201,8 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                     )
                     if upd_cnt == 0:
                         st.warning(
-                            f"⚠️ Outlet **{in_nama_outlet.strip()}** (ID: `{in_id_outlet.strip() or '-'}`) tidak ditemukan pada data customer yang ada. "
-                            "Pastikan ID Outlet atau Nama Outlet sesuai dengan data customer."
+                            f"⚠️ ID Outlet **`{in_id_outlet.strip()}`** tidak ditemukan pada data customer yang ada. "
+                            "Pastikan ID Outlet sesuai dengan data customer."
                         )
                     else:
                         save_data(updated_df)
@@ -2036,7 +2210,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                         st.session_state.load_warning = None
                         parsed_sz = extract_sizes(in_material) if in_material.strip() else "-"
                         st.success(
-                            f"✅ Berhasil mengupdate **{upd_cnt}** data customer untuk **{in_nama_outlet.strip()}** "
+                            f"✅ Berhasil mengupdate **{upd_cnt}** data customer untuk ID **`{in_id_outlet.strip()}`** "
                             f"(Dimensi terbaca: `{parsed_sz}`, Qty: `{int(in_jumlah)}`). Data sudah terupdate di **Semua Data Customer Terfilter**."
                         )
                         st.rerun()
@@ -2101,7 +2275,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             },
             {
                 "ID Outlet": "S50113D250917120644415",
-                "Nama Outlet": "TOKO CONTOH 2",
+                "Nama Outlet": "",
                 "Material": "Sticker Panel Toko 1 x 2 m",
                 "Brand": "LA LIGHTS",
                 "Version": "Cat Eyes",
@@ -2157,7 +2331,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                         )
                         if unmatched:
                             st.warning(
-                                f"⚠️ **{len(unmatched)}** baris tidak ditemukan kecocokan ID/Nama Outlet: {', '.join(unmatched[:20])}"
+                                f"⚠️ **{len(unmatched)}** baris tidak ditemukan kecocokan ID Outlet: {', '.join(unmatched[:20])}"
                             )
                         if upd_cnt > 0:
                             st.rerun()
@@ -2166,7 +2340,90 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
 
 
 # ==========================================
-# HALAMAN 4: IMPORT & SINKRONISASI
+# HALAMAN 4: LIST MATERI PROMOSI (GUDANG PROMOSI)
+# ==========================================
+elif active_menu == "📦 List Materi Promosi":
+    st.markdown("### 📦 List Materi Promosi di Gudang Promosi")
+    st.caption(
+        "Menampilkan stok yang berstatus **Available > 0** dan hanya materi yang mengandung "
+        "**`Sticker Panel Toko`** dan/atau **`Vinyl Panel Toko`**."
+    )
+
+    with st.expander("📤 Update / Upload File Laporan Gudang Promosi (PRCRG01 .xlsx)", expanded=promo_stock_df.empty):
+        promo_upload = st.file_uploader(
+            "Upload File Stok Gudang Promosi (.xlsx)",
+            type=["xlsx"],
+            key="promo_stock_uploader",
+        )
+        if st.button("🔄 Muat & Simpan List Materi Promosi", type="primary", key="btn_load_promo_stock"):
+            if promo_upload is None:
+                st.warning("Pilih file Excel stok gudang terlebih dahulu.")
+            else:
+                try:
+                    parsed_stock = read_promo_stock_workbook(promo_upload)
+                    DATA_DIR.mkdir(parents=True, exist_ok=True)
+                    parsed_stock.to_excel(PROMO_STOCK_FILE, sheet_name="PRCRG01", index=False, engine="openpyxl")
+                    st.session_state.promo_stock = parsed_stock
+                    st.success(f"✅ Berhasil memuat **{len(parsed_stock)}** item materi Sticker/Vinyl Panel Toko yang Available.")
+                    st.rerun()
+                except Exception as error:
+                    st.error(f"Gagal membaca file stok gudang: {error}")
+
+    stock_view = promo_stock_df.copy()
+    if stock_view.empty:
+        st.info("Belum ada data materi **Sticker Panel Toko** atau **Vinyl Panel Toko** yang berstatus **Available > 0**.")
+    else:
+        total_avail_qty = int(pd.to_numeric(stock_view["Available"], errors="coerce").sum())
+        m_c1, m_c2, m_c3 = st.columns(3)
+        m_c1.metric("Jumlah Varian Materi (Available)", len(stock_view))
+        m_c2.metric("Total Stok Available", total_avail_qty)
+        m_c3.metric("Jumlah Brand", int(stock_view["Brand"].dropna().nunique()))
+
+        f_col1, f_col2 = st.columns([2, 1])
+        promo_q = f_col1.text_input(
+            "Cari Materi / Brand / Version",
+            placeholder="Ketik nama material, brand, atau versi...",
+            key="promo_stock_search",
+        )
+        brand_choices = ["Semua Brand"] + sorted(stock_view["Brand"].dropna().astype(str).unique().tolist())
+        promo_brand = f_col2.selectbox("Filter Brand", brand_choices, key="promo_stock_brand")
+
+        if promo_q.strip():
+            qk = promo_q.strip().casefold()
+            stock_view = stock_view[
+                stock_view["Material"].fillna("").astype(str).str.casefold().str.contains(qk, regex=False)
+                | stock_view["Brand"].fillna("").astype(str).str.casefold().str.contains(qk, regex=False)
+                | stock_view["Version"].fillna("").astype(str).str.casefold().str.contains(qk, regex=False)
+            ]
+        if promo_brand != "Semua Brand":
+            stock_view = stock_view[stock_view["Brand"] == promo_brand]
+
+        st.dataframe(
+            stock_view,
+            use_container_width=True,
+            hide_index=True,
+            height=420,
+            column_config={
+                "Material": st.column_config.TextColumn("Material", width="large"),
+                "Brand": st.column_config.TextColumn("Brand", width="medium"),
+                "Version": st.column_config.TextColumn("Version", width="large"),
+                "Available": st.column_config.NumberColumn("Available", format="%d", width="small"),
+                "UOM": st.column_config.TextColumn("UOM", width="small"),
+                "Status Material": st.column_config.TextColumn("Status Material", width="medium"),
+            },
+        )
+
+        st.download_button(
+            "📥 Export List Materi Promosi Available (.xlsx)",
+            data=excel_bytes(stock_view, sheet_name="List Materi Promosi"),
+            file_name="List_Materi_Promosi_Sticker_Vinyl_Available.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_promo_stock_available",
+        )
+
+
+# ==========================================
+# HALAMAN 5: IMPORT & SINKRONISASI
 # ==========================================
 elif active_menu == "🔄 Import & Sinkronisasi":
     tab_main_import, tab_branding, tab_drp_crosscheck, tab_panel_sync = st.tabs([
@@ -2596,7 +2853,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
 
 
 # ==========================================
-# HALAMAN 4: BACKUP & RESTORE CLOUD
+# HALAMAN 6: BACKUP & RESTORE CLOUD
 # ==========================================
 elif active_menu == "☁️ Backup & Restore":
     col_sb, col_gs = st.columns(2)
