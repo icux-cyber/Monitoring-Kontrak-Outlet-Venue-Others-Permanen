@@ -3413,4 +3413,3 @@ elif active_menu == "☁️ Backup & Restore":
                         st.success(f"✅ {row_count} baris berhasil dikirim ke Google Sheet.")
                     except Exception as error:
                         st.error(f"Gagal backup: {error}")
-```[cite: 1]
