@@ -257,8 +257,23 @@ def render_dashboard_table(title: str, frame: pd.DataFrame, download_filename: s
         st.info(f"Tidak ada data customer pada kategori **{title}** yang sesuai dengan filter saat ini.")
         return
 
+    formatted_df = format_outlet_table(sorted_frame).copy()
+
+    # Pastikan "Ukuran Panel Toko" berada tepat di sebelah kiri kolom ukuran sticker/vinyl panel
+    panel_col = "Ukuran Panel Toko"
+    sticker_col = next(
+        (c for c in ("Ukuran Sticker Panel Toko", "Ukuran Sticker / Vinyl Panel") if c in formatted_df.columns),
+        None,
+    )
+    if panel_col in formatted_df.columns and sticker_col and sticker_col != panel_col:
+        cols = list(formatted_df.columns)
+        cols.remove(panel_col)
+        sticker_idx = cols.index(sticker_col)
+        cols.insert(sticker_idx, panel_col)
+        formatted_df = formatted_df[cols]  # <-- diubah
+
     st.dataframe(
-        format_outlet_table(sorted_frame),
+        formatted_df,
         width="stretch",
         hide_index=True,
         height=440,
@@ -268,7 +283,9 @@ def render_dashboard_table(title: str, frame: pd.DataFrame, download_filename: s
             "ID Outlet": st.column_config.TextColumn("ID Outlet", width="small"),
             "Nama Customer": st.column_config.TextColumn("Nama Customer", width="large"),
             "Nominal Kontrak": st.column_config.TextColumn("Nominal Kontrak", width="medium"),
+            "Ukuran Panel Toko": st.column_config.TextColumn("Ukuran Panel Toko", width="medium"),  # <-- diubah
             "Ukuran Sticker Panel Toko": st.column_config.TextColumn("Ukuran Sticker / Vinyl Panel", width="medium"),
+            "Ukuran Sticker / Vinyl Panel": st.column_config.TextColumn("Ukuran Sticker / Vinyl Panel", width="medium"),
             "Brand Panel": st.column_config.TextColumn("Brand Sticker / Vinyl", width="medium"),
             "Versi": st.column_config.TextColumn("Versi", width="small"),
             "Tanggal Penggantian Sticker Panel": st.column_config.TextColumn("Tgl Ganti Sticker / Vinyl Terakhir", width="medium"),
