@@ -1549,6 +1549,40 @@ def build_drp_crosscheck_report(
     )
 
 
+def build_dashboard_only_report(
+    contracts: pd.DataFrame,
+    drp_df: pd.DataFrame,
+) -> pd.DataFrame:
+    dash = normalize_data(contracts).reset_index(drop=True)
+    drp_keys = {
+        customer_id_key(val)
+        for val in drp_df.get("ID Customer", pd.Series(dtype="object")).dropna()
+        if customer_id_key(val)
+    }
+
+    rows = []
+    for idx, d_row in dash.iterrows():
+        raw_id = safe_text(d_row.get("ID Outlet"))
+        k = customer_id_key(raw_id)
+        if not k or k not in drp_keys:
+            rows.append({
+                "_dash_index": int(idx),
+                "ID Outlet": raw_id or "-",
+                "Nama Customer": safe_text(d_row.get("Nama Customer")) or "-",
+                "Zona": safe_text(d_row.get("Zona")) or "-",
+                "Sektor": safe_text(d_row.get("Sektor")) or "-",
+                "Pos Budget": safe_text(d_row.get("Pos Budget")) or "-",
+                "Kategori Pekerjaan": safe_text(d_row.get("Kategori Pekerjaan")) or "-",
+                "Brand": safe_text(d_row.get("Brand")) or "-",
+                "Nominal Kontrak": _fmt_val_cmp("Nominal Kontrak", d_row.get("Nominal Kontrak")),
+                "Periode Kontrak Awal": _fmt_val_cmp("Periode Kontrak Awal", d_row.get("Periode Kontrak Awal")),
+                "Periode Kontrak Akhir": _fmt_val_cmp("Periode Kontrak Akhir", d_row.get("Periode Kontrak Akhir")),
+                "No. Dokumen": safe_text(d_row.get("No. Dokumen")) or "-",
+            })
+
+    return pd.DataFrame(rows)
+
+
 def deduplicate_branding_data(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     records = frame.copy()
     records["_id_key"] = records["ID Customer"].map(customer_id_key)
@@ -3499,16 +3533,23 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                 active_fields,
             )
 
-            m1, m2, m3, m4 = st.columns(4)
+            dash_only_df = build_dashboard_only_report(
+                st.session_state.contracts,
+                drp_source_df,
+            )
+
+            m1, m2, m3, m4, m5 = st.columns(5)
             m1.metric("Total Data DRP", len(drp_source_df))
             m2.metric("Sesuai Semua", len(matched_ok_df))
             m3.metric("Tidak Sesuai", len(mismatch_df))
             m4.metric("ID Belum Ada di Dashboard", len(missing_df))
+            m5.metric("Ada di Dash, Tidak di Upload", len(dash_only_df))
 
-            sub_mismatch, sub_ok, sub_missing = st.tabs([
+            sub_mismatch, sub_ok, sub_missing, sub_dash_only = st.tabs([
                 f"⚠️ Tidak Sesuai ({len(mismatch_df)})",
                 f"✅ Sudah Sesuai ({len(matched_ok_df)})",
                 f"❓ ID Tidak di Dashboard ({len(missing_df)})",
+                f"🗑️ Ada di Dash, Tidak di Upload ({len(dash_only_df)})",
             ])
 
             with sub_mismatch:
@@ -3749,6 +3790,114 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                                         msg += f" ({skipped_existing} ID dilewati karena sudah ada)."
                                     st.success(msg)
                                     st.rerun()
+
+            with sub_dash_only:
+                if dash_only_df.empty:
+                    st.success("✅ Semua data di Dashboard & Monitoring sudah ada pada file DRP yang di-upload.")
+                else:
+                    st.markdown("**Data Ada di Dashboard & Monitoring, tetapi Tidak Ada di Menu Upload (File DRP)**")
+                    st.caption(
+                        "Anda dapat **menghapus sebagian (per row)** dengan mencentang kolom **Pilih Hapus**, "
+                        "atau **menghapus semua** data yang tidak ada di file upload DRP."
+                    )
+
+                    only_no_id_filter = st.checkbox(
+                        "Hanya tampilkan yang memiliki ID Outlet (sembunyikan baris tanpa ID)",
+                        value=False,
+                        key="drp_dash_only_has_id",
+                    )
+                    view_only_df = dash_only_df.copy()
+                    if only_no_id_filter:
+                        view_only_df = view_only_df[view_only_df["ID Outlet"] != "-"].reset_index(drop=True)
+
+                    if view_only_df.empty:
+                        st.info("Tidak ada data yang cocok dengan filter tersebut.")
+                    else:
+                        display_only_cols = [
+                            "ID Outlet",
+                            "Nama Customer",
+                            "Zona",
+                            "Sektor",
+                            "Pos Budget",
+                            "Kategori Pekerjaan",
+                            "Brand",
+                            "Nominal Kontrak",
+                            "Periode Kontrak Awal",
+                            "Periode Kontrak Akhir",
+                            "No. Dokumen",
+                        ]
+                        only_editor_input = view_only_df[display_only_cols].copy()
+                        only_editor_input.insert(0, "Pilih Hapus", False)
+
+                        edited_only = st.data_editor(
+                            only_editor_input,
+                            width="stretch",
+                            hide_index=True,
+                            height=420,
+                            disabled=display_only_cols,
+                            key="drp_dash_only_editor",
+                        )
+
+                        selected_row_mask = edited_only["Pilih Hapus"].fillna(False).to_numpy(dtype=bool)
+                        selected_row_count = int(selected_row_mask.sum())
+
+                        st.download_button(
+                            "📥 Download Daftar Ada di Dash (Tidak di Upload) (.xlsx)",
+                            data=excel_bytes(view_only_df[display_only_cols]),
+                            file_name="Dashboard_Tidak_Ada_Di_Upload_DRP.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="dl_drp_dash_only",
+                        )
+
+                        d_col1, d_col2 = st.columns(2)
+
+                        with d_col1:
+                            confirm_row_del = st.checkbox(
+                                f"Konfirmasi hapus {selected_row_count} baris terpilih",
+                                value=False,
+                                disabled=(selected_row_count == 0),
+                                key="confirm_del_dash_only_rows",
+                            )
+                            if st.button(
+                                f"🗑️ Hapus Sebagian / Per Row ({selected_row_count} baris)",
+                                type="secondary",
+                                width="stretch",
+                                disabled=(selected_row_count == 0 or not confirm_row_del),
+                                key="btn_del_dash_only_rows",
+                            ):
+                                indices_to_drop = view_only_df.loc[selected_row_mask, "_dash_index"].astype(int).tolist()
+                                current_df = normalize_data(st.session_state.contracts)
+                                remaining_df = current_df.drop(index=indices_to_drop).reset_index(drop=True)
+                                save_data(remaining_df)
+                                st.session_state.contracts = remaining_df
+                                _build_master_lookup_maps.clear()
+                                st.session_state["confirm_del_dash_only_rows"] = False
+                                st.success(f"✅ Berhasil menghapus {len(indices_to_drop)} baris terpilih dari Dashboard!")
+                                st.rerun()
+
+                        with d_col2:
+                            confirm_all_del = st.checkbox(
+                                f"Konfirmasi hapus SEMUA ({len(view_only_df)} baris tampil)",
+                                value=False,
+                                key="confirm_del_dash_only_all",
+                            )
+                            if st.button(
+                                f"🚨 Hapus Semua ({len(view_only_df)} baris)",
+                                type="primary",
+                                width="stretch",
+                                disabled=not confirm_all_del,
+                                key="btn_del_dash_only_all",
+                            ):
+                                indices_to_drop_all = view_only_df["_dash_index"].astype(int).tolist()
+                                current_df = normalize_data(st.session_state.contracts)
+                                remaining_df = current_df.drop(index=indices_to_drop_all).reset_index(drop=True)
+                                save_data(remaining_df)
+                                st.session_state.contracts = remaining_df
+                                _build_master_lookup_maps.clear()
+                                st.session_state["confirm_del_dash_only_all"] = False
+                                st.success(f"✅ Berhasil menghapus semua ({len(indices_to_drop_all)} baris) data yang tidak ada di file upload DRP!")
+                                st.rerun()
+
 
     with tab_panel_sync:
         st.caption("Mencocokkan ukuran sticker panel, brand panel, versi, dan ukuran layar dari sheet DRP berdasarkan ID Customer.")
