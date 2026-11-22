@@ -4,6 +4,7 @@ import io
 import json
 import re
 import urllib.parse
+import warnings
 from datetime import date
 from io import BytesIO
 from pathlib import Path
@@ -13,6 +14,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import requests
 import streamlit as st
+
+warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 # ==========================================
 # KONFIGURASI HALAMAN & KONSTANTA
@@ -627,11 +630,6 @@ def lookup_master_indices(
     id_outlet_val,
     nama_outlet_val,
 ) -> list[int]:
-    """
-    Mencari kecocokan pada master data dashboard:
-    - Jika ID Outlet diisi: cocokkan berdasarkan ID Outlet.
-    - Jika ID Outlet kosong namun Nama Outlet diisi: cocokkan berdasarkan Nama Customer.
-    """
     k_id = customer_id_key(id_outlet_val)
     k_name = normalize_name_key(nama_outlet_val)
 
@@ -810,7 +808,18 @@ def read_sticker_order_excel(source) -> pd.DataFrame:
 def generate_sticker_order_png(df_table: pd.DataFrame, tanggal_order: str, nama_vendor: str) -> bytes:
     disp = df_table.copy()
     if disp.empty:
-        disp = pd.DataFrame(columns=["ID Outlet", "Nama Outlet", "Material", "Brand", "Version", "Jumlah Sticker / Vinyl", "Tanggal OrderPenggantian Sticker / Vinyl", "Nama Vendor"])
+        disp = pd.DataFrame(
+            columns=[
+                "ID Outlet",
+                "Nama Outlet",
+                "Material",
+                "Brand",
+                "Version",
+                "Jumlah Sticker / Vinyl",
+                "Tanggal OrderPenggantian Sticker / Vinyl",
+                "Nama Vendor",
+            ]
+        )
 
     col_max_lengths = []
     for col in disp.columns:
@@ -858,7 +867,11 @@ def generate_sticker_order_png(df_table: pd.DataFrame, tanggal_order: str, nama_
         else:
             bg = "#FFFFFF" if row % 2 == 1 else "#F8FAFC"
             cell.set_facecolor(bg)
-            cell.set_text_props(color="#0F172A", weight="bold" if col in (0, 1) else "normal", ha="left" if col in (1, 2, 4) else "center")
+            cell.set_text_props(
+                color="#0F172A",
+                weight="bold" if col in (0, 1) else "normal",
+                ha="left" if col in (1, 2, 4) else "center",
+            )
 
     buf = io.BytesIO()
     plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.15, dpi=250)
@@ -1460,7 +1473,7 @@ def render_dashboard_table(title: str, frame: pd.DataFrame, download_filename: s
             file_name=download_filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key=dl_key,
-            use_container_width=True,
+            width="stretch",
         )
 
     if frame.empty:
@@ -1470,7 +1483,7 @@ def render_dashboard_table(title: str, frame: pd.DataFrame, download_filename: s
     sorted_frame = frame.sort_values("Sisa Hari", na_position="last")
     st.dataframe(
         format_outlet_table(sorted_frame),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         height=440,
         column_config={
@@ -1555,7 +1568,7 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool,
         screen_brand = s2.text_input("Brand Layar", value=safe_text(current["Brand Layar"]), key=f"screen_brand_{suffix}")
 
         st.markdown("")
-        submitted = st.form_submit_button("💾 Simpan Data Customer", type="primary", use_container_width=True)
+        submitted = st.form_submit_button("💾 Simpan Data Customer", type="primary", width="stretch")
 
     values = {
         "ID Outlet": outlet_id.strip() or pd.NA,
@@ -1647,7 +1660,7 @@ with st.sidebar:
         data=excel_bytes(st.session_state.contracts),
         file_name="Monitoring_Kontrak_Outlet.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
+        width="stretch",
     )
 
 # HEADER BANNER
@@ -1730,7 +1743,7 @@ if active_menu == "📊 Dashboard & Monitoring":
     with head_rst:
         st.button(
             "🔄 Reset Filter",
-            use_container_width=True,
+            width="stretch",
             key="btn_reset_dash_filter",
             on_click=reset_dashboard_filters,
         )
@@ -1848,7 +1861,7 @@ elif active_menu == "👥 Kelola Data Customer":
             with me_reset_col:
                 st.button(
                     "🔄 Reset & Batalkan Edit",
-                    use_container_width=True,
+                    width="stretch",
                     key="btn_reset_multi_edit",
                     on_click=reset_multi_edit_state,
                 )
@@ -1896,11 +1909,11 @@ elif active_menu == "👥 Kelola Data Customer":
             else:
                 sel_info_col, btn_all_col, btn_none_col = st.columns([3.5, 1, 1])
                 sel_info_col.markdown("**Daftar Hasil Pencarian (Editable)**")
-                if btn_all_col.button("☑️ Centang Semua", use_container_width=True, key="btn_check_all_multi"):
+                if btn_all_col.button("☑️ Centang Semua", width="stretch", key="btn_check_all_multi"):
                     st.session_state.multi_select_all_state = True
                     st.session_state.pop("multi_customer_data_editor", None)
                     st.rerun()
-                if btn_none_col.button("⬜ Batal Centang", use_container_width=True, key="btn_uncheck_all_multi"):
+                if btn_none_col.button("⬜ Batal Centang", width="stretch", key="btn_uncheck_all_multi"):
                     st.session_state.multi_select_all_state = False
                     st.session_state.pop("multi_customer_data_editor", None)
                     st.rerun()
@@ -1968,11 +1981,11 @@ elif active_menu == "👥 Kelola Data Customer":
                         key="bulk_scope_choice",
                     )
                     ba4.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-                    apply_bulk_clicked = ba4.button("Terapkan Massal", type="secondary", use_container_width=True, key="btn_apply_bulk")
+                    apply_bulk_clicked = ba4.button("Terapkan Massal", type="secondary", width="stretch", key="btn_apply_bulk")
 
                 edited_df = st.data_editor(
                     editor_df,
-                    use_container_width=True,
+                    width="stretch",
                     height=460,
                     hide_index=True,
                     key="multi_customer_data_editor",
@@ -2032,7 +2045,7 @@ elif active_menu == "👥 Kelola Data Customer":
                 act_col1, act_col2, act_col3 = st.columns([2, 1.3, 1.3])
                 act_col1.info(f"💡 Terpilih: **{selected_rows_count}** dari **{len(edited_df)}** baris pada hasil pencarian ini.")
 
-                if act_col2.button("💾 Simpan Perubahan Tabel", type="primary", use_container_width=True, key="btn_save_multi_table"):
+                if act_col2.button("💾 Simpan Perubahan Tabel", type="primary", width="stretch", key="btn_save_multi_table"):
                     full_updated = st.session_state.contracts[COLUMNS].copy()
                     for orig_idx in edited_df.index:
                         for col in COLUMNS:
@@ -2061,7 +2074,7 @@ elif active_menu == "👥 Kelola Data Customer":
                 if st.button(
                     f"🗑️ Hapus Terpilih ({selected_rows_count} baris)",
                     type="secondary",
-                    use_container_width=True,
+                    width="stretch",
                     disabled=(selected_rows_count == 0 or not confirm_delete_all),
                     key="btn_delete_multi_selected",
                 ):
@@ -2176,14 +2189,14 @@ elif active_menu == "👥 Kelola Data Customer":
             data=excel_bytes(pd.DataFrame(columns=COLUMNS)),
             file_name="Template_Tambah_Customer_Baru.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width="stretch",
         )
         dl2.download_button(
             "📝 Template + Contoh Pengisian (.xlsx)",
             data=excel_bytes(sample_row[COLUMNS]),
             file_name="Template_Tambah_Customer_Baru_Contoh.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width="stretch",
         )
 
         st.divider()
@@ -2343,7 +2356,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             submitted_sticker = st.form_submit_button(
                 "💾 Simpan & Update Data Customer",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
             )
 
         if submitted_sticker:
@@ -2421,14 +2434,14 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             data=excel_bytes(pd.DataFrame(columns=STICKER_ORDER_COLUMNS), sheet_name="Penggantian Sticker Panel"),
             file_name="Template_Penggantian_Sticker_Panel.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width="stretch",
         )
         tpl_col2.download_button(
             "📝 Download Template + Contoh (.xlsx)",
             data=excel_bytes(sticker_sample, sheet_name="Penggantian Sticker Panel"),
             file_name="Template_Penggantian_Sticker_Panel_Contoh.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width="stretch",
         )
 
         st.divider()
@@ -2516,7 +2529,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
     if df_order_hasil.empty:
         st.info("Belum ada hasil pemesanan penggantian sticker / vinyl panel.")
     else:
-        st.dataframe(df_order_hasil, use_container_width=True, hide_index=True, height=300)
+        st.dataframe(df_order_hasil, width="stretch", hide_index=True, height=300)
 
         first_row = df_order_hasil.iloc[0]
         tgl_ringkas = safe_text(first_row.get("Tanggal OrderPenggantian Sticker / Vinyl")) or date.today().strftime("%d/%m/%Y")
@@ -2524,7 +2537,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
         png_hasil = generate_sticker_order_png(df_order_hasil, tgl_ringkas, vendor_ringkas)
 
         with st.expander("🖼️ Preview Hasil Gambar Pemesanan (.PNG)", expanded=False):
-            st.image(png_hasil, caption="Hasil Pemesanan Penggantian Sticker / Vinyl Panel", use_container_width=True)
+            st.image(png_hasil, caption="Hasil Pemesanan Penggantian Sticker / Vinyl Panel", width="stretch")
 
         dl_ex_col, dl_png_col, clr_col = st.columns([1.4, 1.4, 1])
         dl_ex_col.download_button(
@@ -2532,16 +2545,16 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             data=excel_bytes(df_order_hasil, sheet_name="Hasil Pemesanan Sticker"),
             file_name=f"Hasil_Pemesanan_Sticker_Panel_{date.today().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width="stretch",
         )
         dl_png_col.download_button(
             "🖼️ Download Hasil (.png)",
             data=png_hasil,
             file_name=f"Hasil_Pemesanan_Sticker_Panel_{date.today().strftime('%Y%m%d')}.png",
             mime="image/png",
-            use_container_width=True,
+            width="stretch",
         )
-        if clr_col.button("🧹 Reset Daftar Sesi Ini", use_container_width=True, key="btn_clear_order_session"):
+        if clr_col.button("🧹 Reset Daftar Sesi Ini", width="stretch", key="btn_clear_order_session"):
             st.session_state.sticker_order_results = []
             st.rerun()
 
@@ -2673,7 +2686,7 @@ elif active_menu == "📦 List Materi Promosi":
 
         st.dataframe(
             stock_view,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             height=420,
             column_config={
@@ -2735,7 +2748,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                 data=excel_bytes(pd.DataFrame(columns=COLUMNS)),
                 file_name="Template_Monitoring_Kontrak_Outlet.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+                width="stretch",
             )
 
     with tab_branding:
@@ -2786,13 +2799,13 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                 with st.expander("Lihat Detail ID Duplikat"):
                     st.dataframe(
                         import_result["duplicates"][["ID Customer", "Customer", "Tanggal Pekerjaan Sampai", "No. Dokumen", "Dipakai"]],
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                     )
             missing_ids = import_result["unmatched"][import_result["unmatched"]["ID Customer"].map(customer_id_key).ne("")]
             if not missing_ids.empty:
                 with st.expander(f"Lihat {len(missing_ids)} ID yang Tidak Ditemukan di Database"):
-                    st.dataframe(missing_ids, use_container_width=True, hide_index=True)
+                    st.dataframe(missing_ids, width="stretch", hide_index=True)
 
     with tab_drp_crosscheck:
         st.markdown("#### 🔎 Crosscheck Data DRP dengan Dashboard & Monitoring")
@@ -2902,7 +2915,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
 
                     edited_mismatch = st.data_editor(
                         editor_df,
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                         height=420,
                         disabled=display_cols,
@@ -2915,13 +2928,13 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                         data=excel_bytes(mismatch_df[display_cols]),
                         file_name="Crosscheck_Selisih_DRP.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
+                        width="stretch",
                     )
 
                     if upd_col.button(
                         "💾 Update Data Terpilih ke Dashboard",
                         type="primary",
-                        use_container_width=True,
+                        width="stretch",
                         key="btn_apply_drp_updates",
                     ):
                         if not fields_to_apply:
@@ -2969,7 +2982,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                         "Akhir Kontrak (DRP)",
                         "No. Dokumen (DRP)",
                     ]
-                    st.dataframe(matched_ok_df[ok_cols], use_container_width=True, hide_index=True)
+                    st.dataframe(matched_ok_df[ok_cols], width="stretch", hide_index=True)
 
             with sub_missing:
                 if missing_df.empty:
@@ -3005,7 +3018,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
 
                     edited_missing = st.data_editor(
                         missing_view_df,
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                         height=400,
                         disabled=list(missing_view_df.columns[1:]),
@@ -3018,13 +3031,13 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                         data=excel_bytes(missing_view_df.drop(columns=["Pilih Tambah"])),
                         file_name="DRP_Belum_Ada_Di_Dashboard.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
+                        width="stretch",
                     )
 
                     if m_add_col.button(
                         "➕ Tambahkan Data Terpilih ke Dashboard",
                         type="primary",
-                        use_container_width=True,
+                        width="stretch",
                         key="btn_add_missing_drp_to_dash",
                     ):
                         add_mask = edited_missing["Pilih Tambah"].fillna(False).to_numpy(dtype=bool)
@@ -3141,14 +3154,14 @@ elif active_menu == "☁️ Backup & Restore":
             else:
                 st.info(f"Tabel: `{sb_table}` • Data saat ini: **{len(st.session_state.contracts)}** outlet")
                 b1, b2 = st.columns(2)
-                if b1.button("⬆️ Backup Sekarang", type="primary", use_container_width=True, key="btn_backup_supabase"):
+                if b1.button("⬆️ Backup Sekarang", type="primary", width="stretch", key="btn_backup_supabase"):
                     try:
                         saved_cnt = backup_to_supabase(st.session_state.contracts, sb_url, sb_key, sb_table)
                         st.success(f"✅ {saved_cnt} baris tersimpan.")
                     except Exception as error:
                         st.error(f"Gagal backup: {error}")
 
-                if b2.button("⬇️ Restore Data", type="secondary", use_container_width=True, key="btn_restore_supabase"):
+                if b2.button("⬇️ Restore Data", type="secondary", width="stretch", key="btn_restore_supabase"):
                     try:
                         restored_df = restore_from_supabase(sb_url, sb_key, sb_table)
                         problems = validate_data(restored_df)
@@ -3175,7 +3188,7 @@ elif active_menu == "☁️ Backup & Restore":
                 st.warning("Konfigurasi `GOOGLE_APPS_SCRIPT_URL` belum diatur di Streamlit Secrets.")
             else:
                 st.info(f"Siap mengirim **{len(st.session_state.contracts)}** data outlet (akan menimpa tab tujuan).")
-                if st.button("⬆️ Backup ke Google Sheet", type="primary", use_container_width=True):
+                if st.button("⬆️ Backup ke Google Sheet", type="primary", width="stretch"):
                     try:
                         row_count = backup_to_google_sheet(st.session_state.contracts, backup_url)
                         st.success(f"✅ {row_count} baris berhasil dikirim ke Google Sheet.")
