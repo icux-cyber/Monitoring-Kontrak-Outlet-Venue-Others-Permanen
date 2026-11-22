@@ -318,9 +318,10 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool,
             for index, column in enumerate(MATERIAL_COLUMNS)
         }
 
+        # Ukuran Panel Toko di sebelah kiri (p1), Ukuran Sticker / Vinyl Panel di sebelah kanan (p2)
         p1, p2, p3, p4, p5, p6 = st.columns(6)
-        panel_size = p1.text_input("Ukuran Panel Toko", value=safe_text(current.get("Ukuran Panel Toko", pd.NA)), placeholder="1 x 3 m", key=f"panel_size_{suffix}")
-        sticker_size = p2.text_input("Ukuran Sticker / Vinyl Panel", value=safe_text(current.get("Ukuran Sticker Panel Toko", pd.NA)), placeholder="1 x 2 m", key=f"sticker_size_{suffix}")
+        panel_size = p1.text_input("Ukuran Panel Toko", value=safe_text(current.get("Ukuran Panel Toko", pd.NA)), placeholder="1 x 3 m", key=f"panel_size_{suffix}")  # <-- diubah
+        sticker_size = p2.text_input("Ukuran Sticker / Vinyl Panel", value=safe_text(current.get("Ukuran Sticker Panel Toko", pd.NA)), placeholder="1 x 2 m", key=f"sticker_size_{suffix}")  # <-- diubah
         panel_brand = p3.text_input("Brand Sticker / Vinyl", value=safe_text(current.get("Brand Panel", pd.NA)), key=f"panel_brand_{suffix}")
         sticker_version = p4.text_input("Versi (Opsional)", value=safe_text(current.get("Versi", pd.NA)), placeholder="V1 / V2", key=f"sticker_version_{suffix}")
         sticker_replace_date = p5.date_input(
@@ -899,7 +900,7 @@ elif active_menu == "👥 Kelola Data Customer":
                 "Brand Layar": pd.NA,
             }]
         )
-        sample_row_ready = _ensure_columns(sample_row)[COLUMNS]  # <-- diubah
+        sample_row_ready = _ensure_columns(sample_row)[COLUMNS]
         dl1, dl2 = st.columns(2)
         dl1.download_button(
             "📄 Template Kosong (.xlsx)",
@@ -910,7 +911,7 @@ elif active_menu == "👥 Kelola Data Customer":
         )
         dl2.download_button(
             "📝 Template + Contoh Pengisian (.xlsx)",
-            data=excel_bytes(sample_row_ready),  # <-- diubah
+            data=excel_bytes(sample_row_ready),
             file_name="Template_Tambah_Customer_Baru_Contoh.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width="stretch",
@@ -1175,14 +1176,14 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":
         tpl_col1, tpl_col2 = st.columns(2)
         tpl_col1.download_button(
             "📄 Download Template Kosong (.xlsx)",
-            data=excel_bytes(pd.DataFrame(columns=STICKER_ORDER_COLUMNS), sheet_name="Penggantian Sticker / Vinyl Panel"),
+            data=excel_bytes(pd.DataFrame(columns=STICKER_ORDER_COLUMNS), sheet_name="Penggantian Sticker - Vinyl"),
             file_name="Template_Penggantian_Sticker_Vinyl_Panel.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width="stretch",
         )
         tpl_col2.download_button(
             "📝 Download Template + Contoh (.xlsx)",
-            data=excel_bytes(sticker_sample, sheet_name="Penggantian Sticker / Vinyl Panel"),
+            data=excel_bytes(sticker_sample, sheet_name="Penggantian Sticker - Vinyl"),
             file_name="Template_Penggantian_Sticker_Vinyl_Panel_Contoh.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width="stretch",
@@ -1277,7 +1278,7 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":
         dl_ex_col, dl_png_col, clr_chk_col, clr_col = st.columns([1.3, 1.3, 0.9, 1.0])
         dl_ex_col.download_button(
             "📥 Download Log Hasil (.xlsx)",
-            data=excel_bytes(target_export_df, sheet_name="Log Hasil Pemesanan Sticker / Vinyl"),
+            data=excel_bytes(target_export_df, sheet_name="Log Hasil Pemesanan"),
             file_name=f"Log_Hasil_Pemesanan_Sticker_Vinyl_Panel_{date.today().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width="stretch",
