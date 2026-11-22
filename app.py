@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import textwrap
 import urllib.parse
 import warnings
 from datetime import date
@@ -25,6 +26,7 @@ DATA_DIR = Path("data")
 DATA_FILE = DATA_DIR / "DRP & Outlet MCD - DSO Surabaya Barat.xlsx"
 PROMO_STOCK_FILE = DATA_DIR / "PRCRG01_Gudang_Promosi.xlsx"
 PEJABAT_EMAIL_FILE = DATA_DIR / "master_email_pejabat.xlsx"
+STICKER_ORDER_LOG_FILE = DATA_DIR / "log_hasil_pemesanan_sticker.xlsx"
 SHEET_NAME = "Monitoring Kontrak Outlet"
 DRP_SHEET_NAME = "Pemesanan Layar DRP"
 
@@ -57,6 +59,21 @@ STICKER_ORDER_COLUMNS = [
     "Jumlah Sticker / Vinyl",
     "Tanggal OrderPenggantian Sticker / Vinyl",
     "Nama Vendor",
+]
+STICKER_LOG_COLUMNS = [
+    "Waktu Input",
+    "ID Outlet",
+    "Nama Outlet",
+    "Alamat",
+    "Zona",
+    "Material",
+    "Ukuran",
+    "Brand",
+    "Version",
+    "Jumlah Sticker / Vinyl",
+    "Tanggal OrderPenggantian Sticker / Vinyl",
+    "Nama Vendor",
+    "Status Kirim Pejabat",
 ]
 COLUMNS = [
     "ID Outlet", "Nama Customer", "Alamat", "Zona", "Sektor", "Pos Budget",
@@ -295,6 +312,76 @@ def safe_text(value) -> str:
 
 def safe_date(value):
     return None if pd.isna(value) else pd.Timestamp(value).date()
+
+
+def normalize_sticker_order_records(records: list[dict] | pd.DataFrame) -> list[dict]:
+    if isinstance(records, pd.DataFrame):
+        raw_list = records.to_dict(orient="records") if not records.empty else []
+    else:
+        raw_list = list(records or [])
+
+    now_str = pd.Timestamp.now().strftime("%d/%m/%Y %H:%M")
+    cleaned: list[dict] = []
+    for item in raw_list:
+        if not isinstance(item, dict):
+            continue
+        qty_raw = item.get("Jumlah Sticker / Vinyl", 0)
+        try:
+            qty_val = int(float(qty_raw)) if pd.notna(qty_raw) and str(qty_raw).strip() != "" else 0
+        except (TypeError, ValueError):
+            qty_val = 0
+
+        cleaned.append({
+            "Waktu Input": safe_text(item.get("Waktu Input")) or now_str,
+            "ID Outlet": safe_text(item.get("ID Outlet")) or "-",
+            "Nama Outlet": safe_text(item.get("Nama Outlet")) or "-",
+            "Alamat": safe_text(item.get("Alamat")) or "-",
+            "Zona": safe_text(item.get("Zona")) or "-",
+            "Material": safe_text(item.get("Material")) or "-",
+            "Ukuran": safe_text(item.get("Ukuran")) or "-",
+            "Brand": safe_text(item.get("Brand")) or "-",
+            "Version": safe_text(item.get("Version")) or "-",
+            "Jumlah Sticker / Vinyl": qty_val,
+            "Tanggal OrderPenggantian Sticker / Vinyl": (
+                safe_text(item.get("Tanggal OrderPenggantian Sticker / Vinyl"))
+                or date.today().strftime("%d/%m/%Y")
+            ),
+            "Nama Vendor": safe_text(item.get("Nama Vendor")) or "-",
+            "Status Kirim Pejabat": safe_text(item.get("Status Kirim Pejabat")) or "Siap Kirim",
+        })
+    return cleaned
+
+
+def save_sticker_order_log(records: list[dict] | pd.DataFrame) -> list[dict]:
+    cleaned = normalize_sticker_order_records(records)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    df_log = pd.DataFrame(cleaned, columns=STICKER_LOG_COLUMNS)
+    df_log.to_excel(STICKER_ORDER_LOG_FILE, sheet_name="Log Pemesanan Sticker", index=False, engine="openpyxl")
+    return cleaned
+
+
+def load_sticker_order_log() -> list[dict]:
+    if not STICKER_ORDER_LOG_FILE.exists():
+        return []
+    try:
+        df_log = pd.read_excel(STICKER_ORDER_LOG_FILE, sheet_name=0, header=0, engine="openpyxl")
+        if df_log.empty:
+            return []
+        return normalize_sticker_order_records(df_log)
+    except Exception:
+        return []
+
+
+def append_sticker_order_log(new_records: list[dict], existing_records: list[dict]) -> list[dict]:
+    now_str = pd.Timestamp.now().strftime("%d/%m/%Y %H:%M")
+    stamped: list[dict] = []
+    for rec in new_records:
+        item = dict(rec)
+        item.setdefault("Waktu Input", now_str)
+        item.setdefault("Status Kirim Pejabat", "Siap Kirim")
+        stamped.append(item)
+    merged = normalize_sticker_order_records(stamped + list(existing_records or []))
+    return save_sticker_order_log(merged)
 
 
 def parse_amount(value):
@@ -810,6 +897,7 @@ def apply_sticker_replacement_orders(
         qty_num = int(pd.to_numeric(raw_qty, errors="coerce") or 0)
         parsed_dt = pd.to_datetime(raw_date, errors="coerce", dayfirst=True)
         date_val = parsed_dt.tz_localize(None) if not pd.isna(parsed_dt) else pd.Timestamp(date.today()).normalize()
+        now_stamp = pd.Timestamp.now().strftime("%d/%m/%Y %H:%M")
 
         for r_idx in matched_indices:
             if pd.notna(alamat_val) and str(alamat_val).strip() != "":
@@ -830,6 +918,7 @@ def apply_sticker_replacement_orders(
 
             m_row = target.loc[r_idx]
             matched_records.append({
+                "Waktu Input": now_stamp,
                 "ID Outlet": safe_text(m_row.get("ID Outlet")) or id_str or "-",
                 "Nama Outlet": safe_text(m_row.get("Nama Customer")) or name_str or "-",
                 "Alamat": safe_text(alamat_val) or safe_text(m_row.get("Alamat")) or "-",
@@ -841,6 +930,7 @@ def apply_sticker_replacement_orders(
                 "Jumlah Sticker / Vinyl": qty_num,
                 "Tanggal OrderPenggantian Sticker / Vinyl": date_val.strftime("%d/%m/%Y") if not pd.isna(date_val) else "-",
                 "Nama Vendor": safe_text(vendor_val) or "-",
+                "Status Kirim Pejabat": "Siap Kirim",
             })
 
     if strict_master_lookup and unmatched_labels:
@@ -933,18 +1023,20 @@ def _generate_sticker_order_png_cached(records_json: str, tanggal_order: str, na
 
 
 def generate_sticker_order_png(df_table: pd.DataFrame, tanggal_order: str, nama_vendor: str) -> bytes:
-    payload = df_table.drop(columns=["Material"], errors="ignore").head(100).to_json(
+    payload = df_table.drop(columns=["ID Outlet", "Material", "Waktu Input", "Alamat", "Zona", "Status Kirim Pejabat"], errors="ignore").head(100).to_json(
         orient="records", date_format="iso", force_ascii=False
     )
     return _generate_sticker_order_png_cached(payload, tanggal_order, nama_vendor)
 
 
 def _generate_sticker_order_png_impl(df_table: pd.DataFrame, tanggal_order: str, nama_vendor: str) -> bytes:
-    disp = df_table.drop(columns=["Material"], errors="ignore").copy()
+    disp = df_table.drop(
+        columns=["ID Outlet", "Material", "Waktu Input", "Alamat", "Zona", "Status Kirim Pejabat"],
+        errors="ignore",
+    ).copy()
     if disp.empty:
         disp = pd.DataFrame(
             columns=[
-                "ID Outlet",
                 "Nama Outlet",
                 "Ukuran",
                 "Brand",
@@ -955,38 +1047,63 @@ def _generate_sticker_order_png_impl(df_table: pd.DataFrame, tanggal_order: str,
             ]
         )
 
-    col_max_lengths = []
+    col_max_chars: list[int] = []
     for col in disp.columns:
-        max_len = max([len(str(col))] + [len(str(v)) for v in disp[col].values])
-        col_max_lengths.append(max(max_len, 6))
+        header_w = len(str(col))
+        sample_vals = [len(line) for v in disp[col].values for line in str(v).splitlines()] or [0]
+        longest_token = max([len(tok) for v in disp[col].values for tok in str(v).split()] or [4])
+        natural_w = max([header_w, *sample_vals, 8])
+        capped_w = min(max(natural_w, min(longest_token + 2, 16)), 42)
+        col_max_chars.append(capped_w)
 
-    total_len = sum(col_max_lengths) or 1
-    col_widths = [w / total_len for w in col_max_lengths]
+    total_chars = sum(col_max_chars) or 1
+    col_widths = [w / total_chars for w in col_max_chars]
 
-    num_rows = len(disp)
-    fig_width = max(16, len(disp.columns) * 2.0)
-    fig_height = max(3.6, (num_rows + 3.5) * 0.45)
+    wrapped_rows: list[list[str]] = []
+    row_line_counts: list[int] = [1]
+    for row_vals in disp.values:
+        wrapped_cell_lines: list[list[str]] = []
+        max_lines_in_row = 1
+        for c_idx, val in enumerate(row_vals):
+            txt = "" if pd.isna(val) else str(val)
+            wrap_width = max(col_max_chars[c_idx], 8)
+            lines: list[str] = []
+            for para in (txt.splitlines() or [""]):
+                wrapped = textwrap.wrap(para, width=wrap_width, break_long_words=True, break_hyphens=False)
+                lines.extend(wrapped or [""])
+            wrapped_cell_lines.append(lines)
+            if len(lines) > max_lines_in_row:
+                max_lines_in_row = len(lines)
+        row_line_counts.append(max_lines_in_row)
+        wrapped_rows.append([
+            "\n".join(wrapped_cell_lines[c_idx]) for c_idx in range(len(disp.columns))
+        ])
+
+    total_lines = sum(row_line_counts)
+    fig_width = max(14.0, min(28.0, total_chars * 0.135))
+    fig_height = max(3.6, min(36.0, total_lines * 0.34 + 1.8))
 
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
     ax.axis("off")
 
-    ax.add_patch(patches.Rectangle((0.0, 0.86), 1.0, 0.11, facecolor="#0F172A", edgecolor="#000000", lw=1))
+    ax.add_patch(patches.Rectangle((0.0, 0.88), 1.0, 0.10, facecolor="#0F172A", edgecolor="#000000", lw=1))
     ax.text(
         0.015,
-        0.915,
+        0.93,
         f"HASIL PEMESANAN PENGGANTIAN STICKER / VINYL PANEL TOKO   |   Tanggal: {tanggal_order}   |   Vendor: {nama_vendor or 'Semua'}",
         ha="left",
         va="center",
-        fontsize=10,
+        fontsize=10.5,
         weight="bold",
         color="#FFFFFF",
     )
 
+    table_display = pd.DataFrame(wrapped_rows, columns=disp.columns) if wrapped_rows else disp
     table = ax.table(
-        cellText=disp.values,
+        cellText=table_display.values if not table_display.empty else [["-"] * len(disp.columns)],
         colLabels=disp.columns,
         loc="center",
-        bbox=[0.0, 0.03, 1.0, 0.80],
+        bbox=[0.0, 0.02, 1.0, 0.83],
     )
     table.auto_set_font_size(False)
     table.set_fontsize(8.5)
@@ -1001,14 +1118,16 @@ def _generate_sticker_order_png_impl(df_table: pd.DataFrame, tanggal_order: str,
         else:
             bg = "#FFFFFF" if row % 2 == 1 else "#F8FAFC"
             cell.set_facecolor(bg)
+            is_left_col = col in (0, 1, 2, 3)
             cell.set_text_props(
                 color="#0F172A",
-                weight="bold" if col in (0, 1) else "normal",
-                ha="left" if col in (1, 2, 4) else "center",
+                weight="bold" if col == 0 else "normal",
+                ha="left" if is_left_col else "center",
+                va="center",
             )
 
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.15, dpi=180)
+    plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.18, dpi=180)
     plt.close(fig)
     buf.seek(0)
     return buf.getvalue()
@@ -1450,16 +1569,23 @@ def excel_bytes(frame: pd.DataFrame, sheet_name: str = SHEET_NAME) -> bytes:
     return output.getvalue()
 
 
-def backup_to_google_sheet(frame: pd.DataFrame, url: str) -> int:
+def backup_to_google_sheet(
+    frame: pd.DataFrame,
+    url: str,
+    sticker_order_log: list[dict] | None = None,
+) -> int:
     if not url.startswith("https://script.google.com/"):
         raise ValueError("URL backup harus menggunakan alamat HTTPS Google Apps Script.")
     normalized = normalize_data(frame)
     records = json.loads(normalized.to_json(orient="records", date_format="iso", force_ascii=False))
+    order_log_records = normalize_sticker_order_records(sticker_order_log or [])
     payload = {
         "action": "backup",
         "sheet_name": SHEET_NAME,
         "columns": COLUMNS,
         "records": records,
+        "sticker_order_log": order_log_records,
+        "sticker_order_log_columns": STICKER_LOG_COLUMNS,
         "backup_at": pd.Timestamp.now(tz="UTC").isoformat(),
     }
     response = requests.post(url, json=payload, timeout=60)
@@ -1507,13 +1633,20 @@ def _supabase_config() -> tuple[str, str, str]:
     return url, key, table
 
 
-def backup_to_supabase(frame: pd.DataFrame, url: str, api_key: str, table: str) -> int:
+def backup_to_supabase(
+    frame: pd.DataFrame,
+    url: str,
+    api_key: str,
+    table: str,
+    sticker_order_log: list[dict] | None = None,
+) -> int:
     clean_url = str(url or "").strip().rstrip("/")
     clean_table = str(table or "").strip()
     if not clean_url.startswith("https://") or not clean_table:
         raise ValueError("SUPABASE_URL dan nama tabel Supabase harus valid.")
     normalized = normalize_data(frame)
     records = json.loads(normalized.to_json(orient="records", date_format="iso", force_ascii=False))
+    order_log_records = normalize_sticker_order_records(sticker_order_log or [])
     headers = _supabase_headers(api_key)
     endpoint = f"{clean_url}/rest/v1/{clean_table}"
 
@@ -1521,26 +1654,30 @@ def backup_to_supabase(frame: pd.DataFrame, url: str, api_key: str, table: str) 
     if del_resp.status_code >= 400:
         raise ValueError(f"Gagal membersihkan data lama di Supabase ({del_resp.status_code}): {del_resp.text}")
 
-    if records:
-        payload = [{"payload_json": records}]
+    envelope = {
+        "records": records,
+        "sticker_order_log": order_log_records,
+        "backup_at": pd.Timestamp.now(tz="UTC").isoformat(),
+    }
+    payload = [{"payload_json": envelope}]
+    ins_resp = requests.post(
+        endpoint,
+        headers={**headers, "Prefer": "return=representation"},
+        json=payload,
+        timeout=60,
+    )
+    if ins_resp.status_code == 400 and "payload_json" in ins_resp.text:
         ins_resp = requests.post(
             endpoint,
             headers={**headers, "Prefer": "return=representation"},
-            json=payload,
+            json=records,
             timeout=60,
         )
-        if ins_resp.status_code == 400 and "payload_json" in ins_resp.text:
-            ins_resp = requests.post(
-                endpoint,
-                headers={**headers, "Prefer": "return=representation"},
-                json=records,
-                timeout=60,
-            )
-        ins_resp.raise_for_status()
+    ins_resp.raise_for_status()
     return len(records)
 
 
-def restore_from_supabase(url: str, api_key: str, table: str) -> pd.DataFrame:
+def restore_from_supabase(url: str, api_key: str, table: str) -> tuple[pd.DataFrame, list[dict] | None]:
     clean_url = str(url or "").strip().rstrip("/")
     clean_table = str(table or "").strip()
     if not clean_url.startswith("https://") or not clean_table:
@@ -1551,13 +1688,24 @@ def restore_from_supabase(url: str, api_key: str, table: str) -> pd.DataFrame:
     resp.raise_for_status()
     rows = resp.json()
     if not isinstance(rows, list) or not rows:
-        return pd.DataFrame(columns=COLUMNS)
-    raw_records = rows[0].get("payload_json")
-    if isinstance(raw_records, str):
-        raw_records = json.loads(raw_records)
+        return pd.DataFrame(columns=COLUMNS), None
+    raw_payload = rows[0].get("payload_json")
+    if isinstance(raw_payload, str):
+        raw_payload = json.loads(raw_payload)
+
+    if isinstance(raw_payload, dict):
+        raw_records = raw_payload.get("records") or []
+        restored_log = normalize_sticker_order_records(raw_payload.get("sticker_order_log") or [])
+    elif isinstance(raw_payload, list):
+        raw_records = raw_payload
+        restored_log = None
+    else:
+        raw_records = []
+        restored_log = None
+
     if not isinstance(raw_records, list) or not raw_records:
-        return pd.DataFrame(columns=COLUMNS)
-    return normalize_data(pd.DataFrame(raw_records))
+        return pd.DataFrame(columns=COLUMNS), restored_log
+    return normalize_data(pd.DataFrame(raw_records)), restored_log
 
 
 def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1748,7 +1896,7 @@ if "pejabat_emails" not in st.session_state:
     st.session_state.pejabat_emails = load_pejabat_emails()
 
 if "sticker_order_results" not in st.session_state:
-    st.session_state.sticker_order_results = []
+    st.session_state.sticker_order_results = load_sticker_order_log()
 
 if "multi_select_all_state" not in st.session_state:
     st.session_state.multi_select_all_state = False
@@ -1787,6 +1935,7 @@ with st.sidebar:
     st.write(f"• **Kritis (≤30 hr):** `{critical_count}`")
     st.write(f"• **Expired:** `{expired_count}`")
     st.write(f"• **Stok Sticker/Vinyl Ready:** `{len(promo_stock_df)}`")
+    st.write(f"• **Log Pemesanan Sticker:** `{len(st.session_state.sticker_order_results)}`")
 
     st.divider()
     st.download_button(
@@ -2588,11 +2737,14 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                         st.session_state.contracts = updated_df
                         st.session_state.load_warning = None
                         _build_master_lookup_maps.clear()
-                        st.session_state.sticker_order_results = rec_list + st.session_state.sticker_order_results
+                        st.session_state.sticker_order_results = append_sticker_order_log(
+                            rec_list, st.session_state.sticker_order_results
+                        )
+                        st.session_state.pop("sticker_order_png_bytes", None)
                         st.session_state["_last_autofill_alamat_key"] = ""
                         st.success(
                             f"✅ Lookup cocok dengan Master Data Dashboard: berhasil mengupdate **{upd_cnt}** baris customer "
-                            f"dan menambahkan hasil pemesanan ke tabel di bawah."
+                            f"dan mencatat hasil pemesanan ke log."
                         )
                         st.rerun()
                     except Exception as error:
@@ -2668,79 +2820,101 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                         st.session_state.contracts = updated_df
                         st.session_state.load_warning = None
                         _build_master_lookup_maps.clear()
-                        st.session_state.sticker_order_results = rec_list + st.session_state.sticker_order_results
+                        st.session_state.sticker_order_results = append_sticker_order_log(
+                            rec_list, st.session_state.sticker_order_results
+                        )
+                        st.session_state.pop("sticker_order_png_bytes", None)
                         st.session_state["_last_autofill_alamat_key"] = ""
                         st.success(
                             f"✅ Seluruh baris cocok dengan Master Data Dashboard: **{upd_cnt}** baris customer terupdate "
-                            f"(dari **{len(orders_df)}** baris pemesanan)."
+                            f"(dari **{len(orders_df)}** baris pemesanan) dan tercatat di log."
                         )
                         st.rerun()
                 except Exception as error:
                     st.error(f"❌ Gagal memproses & menyimpan file Excel: {error}")
 
     # ==========================================
-    # HASIL PEMESANAN, DOWNLOAD (.XLSX & .PNG) & SEND TO PEJABAT
+    # LOG HASIL PEMESANAN, DOWNLOAD (.XLSX & .PNG) & SEND TO PEJABAT
     # ==========================================
     st.divider()
-    st.markdown("### 📋 Hasil Pemesanan & Kirim ke Pejabat")
+    st.markdown("### 📋 Log Hasil Pemesanan & Kirim ke Pejabat")
+    st.caption(
+        "Menyimpan riwayat pemesanan penggantian sticker / vinyl panel secara persisten "
+        "dan ikut disertakan pada proses **Backup & Restore**."
+    )
 
-    if st.session_state.sticker_order_results:
-        df_order_hasil = pd.DataFrame(st.session_state.sticker_order_results)
-    else:
-        df_order_hasil = pd.DataFrame(
-            columns=[
-                "ID Outlet",
-                "Nama Outlet",
-                "Zona",
-                "Material",
-                "Ukuran",
-                "Brand",
-                "Version",
-                "Jumlah Sticker / Vinyl",
-                "Tanggal OrderPenggantian Sticker / Vinyl",
-                "Nama Vendor",
-            ]
-        )
+    normalized_log = normalize_sticker_order_records(st.session_state.sticker_order_results)
+    df_order_hasil = pd.DataFrame(normalized_log, columns=STICKER_LOG_COLUMNS) if normalized_log else pd.DataFrame(columns=STICKER_LOG_COLUMNS)
 
     if df_order_hasil.empty:
-        st.info("Belum ada hasil pemesanan penggantian sticker / vinyl panel pada sesi ini. Silakan input form atau upload file Excel pemesanan terlebih dahulu.")
+        st.info("Belum ada log hasil pemesanan penggantian sticker / vinyl panel. Silakan input form atau upload file Excel pemesanan terlebih dahulu.")
     else:
-        st.dataframe(df_order_hasil, width="stretch", hide_index=True, height=300)
+        log_q_col, log_v_col = st.columns([2, 1])
+        log_search = log_q_col.text_input(
+            "Cari di Log Hasil Pemesanan (Outlet, Brand, Version, Vendor, atau Tanggal)",
+            placeholder="Ketik kata kunci...",
+            key="sticker_log_search",
+        )
+        log_vendors = ["Semua Vendor"] + sorted(
+            [v for v in df_order_hasil["Nama Vendor"].dropna().astype(str).unique() if v and v != "-"]
+        )
+        log_vendor_filter = log_v_col.selectbox("Filter Vendor", log_vendors, key="sticker_log_vendor")
 
-        first_row = df_order_hasil.iloc[0]
+        df_log_view = df_order_hasil.copy()
+        if log_search.strip():
+            lq = log_search.strip().casefold()
+            l_mask = (
+                df_log_view["Nama Outlet"].fillna("").astype(str).str.casefold().str.contains(lq, regex=False)
+                | df_log_view["Brand"].fillna("").astype(str).str.casefold().str.contains(lq, regex=False)
+                | df_log_view["Version"].fillna("").astype(str).str.casefold().str.contains(lq, regex=False)
+                | df_log_view["Nama Vendor"].fillna("").astype(str).str.casefold().str.contains(lq, regex=False)
+                | df_log_view["Tanggal OrderPenggantian Sticker / Vinyl"].fillna("").astype(str).str.casefold().str.contains(lq, regex=False)
+            )
+            df_log_view = df_log_view[l_mask]
+        if log_vendor_filter != "Semua Vendor":
+            df_log_view = df_log_view[df_log_view["Nama Vendor"] == log_vendor_filter]
+
+        st.dataframe(df_log_view, width="stretch", hide_index=True, height=320)
+
+        target_export_df = df_log_view if not df_log_view.empty else df_order_hasil
+        first_row = target_export_df.iloc[0]
         tgl_ringkas = safe_text(first_row.get("Tanggal OrderPenggantian Sticker / Vinyl")) or date.today().strftime("%d/%m/%Y")
-        vendor_ringkas = safe_text(first_row.get("Nama Vendor")) or "Semua Vendor"
+        vendor_ringkas = (
+            log_vendor_filter
+            if log_vendor_filter != "Semua Vendor"
+            else (safe_text(first_row.get("Nama Vendor")) or "Semua Vendor")
+        )
 
         dl_ex_col, dl_png_col, clr_col = st.columns([1.4, 1.4, 1])
         dl_ex_col.download_button(
-            "📥 Download Hasil (.xlsx)",
-            data=excel_bytes(df_order_hasil, sheet_name="Hasil Pemesanan Sticker"),
-            file_name=f"Hasil_Pemesanan_Sticker_Panel_{date.today().strftime('%Y%m%d')}.xlsx",
+            "📥 Download Log Hasil (.xlsx)",
+            data=excel_bytes(target_export_df, sheet_name="Log Hasil Pemesanan Sticker"),
+            file_name=f"Log_Hasil_Pemesanan_Sticker_Panel_{date.today().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width="stretch",
         )
 
         png_bytes_ready = st.session_state.get("sticker_order_png_bytes")
-        if dl_png_col.button("🖼️ Siapkan / Download Gambar (.png)", width="stretch", key="btn_prep_png"):
-            with st.spinner("Menghasilkan gambar .PNG..."):
-                png_bytes_ready = generate_sticker_order_png(df_order_hasil, tgl_ringkas, vendor_ringkas)
+        if dl_png_col.button("🖼️ Generate Gambar PNG (Tanpa ID Outlet)", width="stretch", key="btn_prep_png"):
+            with st.spinner("Menghasilkan gambar .PNG dengan auto-adjust kolom..."):
+                png_bytes_ready = generate_sticker_order_png(target_export_df, tgl_ringkas, vendor_ringkas)
                 st.session_state["sticker_order_png_bytes"] = png_bytes_ready
 
-        if clr_col.button("🧹 Reset Daftar Sesi Ini", width="stretch", key="btn_clear_order_session"):
-            st.session_state.sticker_order_results = []
+        if clr_col.button("🧹 Hapus Semua Log", width="stretch", key="btn_clear_order_session"):
+            st.session_state.sticker_order_results = save_sticker_order_log([])
             st.session_state.pop("sticker_order_png_bytes", None)
             st.rerun()
 
         if png_bytes_ready:
             st.download_button(
-                "⬇️ Simpan File Gambar (.png)",
+                "⬇️ Download Gambar Hasil (.png)",
                 data=png_bytes_ready,
                 file_name=f"Hasil_Pemesanan_Sticker_Panel_{date.today().strftime('%Y%m%d')}.png",
                 mime="image/png",
                 key="btn_dl_png_ready",
             )
             with st.expander("🖼️ Preview Hasil Gambar Pemesanan (.PNG)", expanded=True):
-                st.image(png_bytes_ready, caption="Hasil Pemesanan Penggantian Sticker / Vinyl Panel", width="stretch")
+                st.image(png_bytes_ready, caption="Hasil Pemesanan Penggantian Sticker / Vinyl Panel (ID Outlet disembunyikan)", width="stretch")
 
         st.markdown("#### ✉️ Kirim Hasil Pemesanan ke Pejabat")
         daftar_pejabat = st.session_state.pejabat_emails
@@ -2780,7 +2954,6 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
         cc_str = "; ".join(cc_list)
         table_cols = [
             "No",
-            "ID Outlet",
             "Nama Outlet",
             "Ukuran",
             "Brand",
@@ -2789,11 +2962,10 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             "Vendor",
         ]
         table_rows: list[list[str]] = []
-        for idx_r, (_, r) in enumerate(df_order_hasil.head(20).iterrows(), start=1):
+        for idx_r, (_, r) in enumerate(target_export_df.head(20).iterrows(), start=1):
             ukuran_val = safe_text(r.get("Ukuran")) or safe_text(r.get("Material")) or "-"
             table_rows.append([
                 str(idx_r),
-                safe_text(r.get("ID Outlet")) or "-",
                 safe_text(r.get("Nama Outlet")) or "-",
                 ukuran_val,
                 safe_text(r.get("Brand")) or "-",
@@ -2821,17 +2993,13 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
 
         email_subject = f"Pemesanan Penggantian Sticker / Vinyl Panel Toko - {tgl_ringkas}"
         email_body = (
-            "Dengan Hormat,\n\n"
-            "\n\n"
-            f"Berikut Kami kirimkan data pemesanan penggantian Sticker / Vinyl Panel Toko ({len(df_order_hasil)} item):\n\n"
-            "\n\n"
-            "\n\n"
-            "\n\n"
-            "\n\n"
+            "Yth. Bapak/Ibu Pejabat,\n\n"
+            f"Berikut hasil pemesanan penggantian Sticker / Vinyl Panel Toko ({len(target_export_df)} item):\n\n"
+            f"{ringkasan_tabel}\n\n"
+            "Mohon lampiran file Excel (.xlsx) dan gambar (.png) yang telah diunduh disertakan pada email ini.\n\n"
             "Terima kasih.\n"
-            "\n\n"
-            "Hormat kami"
-            
+            "Hormat kami,\n"
+            "Eka Sulawestara"
         )
         mailto_pejabat_url = (
             f"mailto:"
@@ -3384,23 +3552,34 @@ elif active_menu == "☁️ Backup & Restore":
     with col_sb:
         with st.container(border=True):
             st.subheader("🗄️ Supabase Cloud")
-            st.caption("Simpan snapshot database atau pulihkan data terakhir dari Supabase.")
+            st.caption("Simpan snapshot database & log pemesanan sticker atau pulihkan data terakhir dari Supabase.")
             sb_url, sb_key, sb_table = _supabase_config()
             if not sb_url or not sb_key:
                 st.warning("Konfigurasi `SUPABASE_URL` dan `SUPABASE_SERVICE_ROLE_KEY` belum diatur di Streamlit Secrets.")
             else:
-                st.info(f"Tabel: `{sb_table}` • Data saat ini: **{len(st.session_state.contracts)}** outlet")
+                st.info(
+                    f"Tabel: `{sb_table}` • Data kontrak: **{len(st.session_state.contracts)}** outlet • "
+                    f"Log pemesanan sticker: **{len(st.session_state.sticker_order_results)}** baris"
+                )
                 b1, b2 = st.columns(2)
                 if b1.button("⬆️ Backup Sekarang", type="primary", width="stretch", key="btn_backup_supabase"):
                     try:
-                        saved_cnt = backup_to_supabase(st.session_state.contracts, sb_url, sb_key, sb_table)
-                        st.success(f"✅ {saved_cnt} baris tersimpan.")
+                        saved_cnt = backup_to_supabase(
+                            st.session_state.contracts,
+                            sb_url,
+                            sb_key,
+                            sb_table,
+                            sticker_order_log=st.session_state.sticker_order_results,
+                        )
+                        st.success(
+                            f"✅ {saved_cnt} baris kontrak & {len(st.session_state.sticker_order_results)} baris log pemesanan tersimpan."
+                        )
                     except Exception as error:
                         st.error(f"Gagal backup: {error}")
 
                 if b2.button("⬇️ Restore Data", type="secondary", width="stretch", key="btn_restore_supabase"):
                     try:
-                        restored_df = restore_from_supabase(sb_url, sb_key, sb_table)
+                        restored_df, restored_log = restore_from_supabase(sb_url, sb_key, sb_table)
                         problems = validate_data(restored_df)
                         if problems:
                             st.error("\n".join(problems))
@@ -3408,8 +3587,10 @@ elif active_menu == "☁️ Backup & Restore":
                             save_data(restored_df)
                             st.session_state.contracts = restored_df
                             st.session_state.load_warning = None
+                            if restored_log is not None:
+                                st.session_state.sticker_order_results = save_sticker_order_log(restored_log)
                             _build_master_lookup_maps.clear()
-                            st.success(f"✅ {len(restored_df)} baris dipulihkan.")
+                            st.success(f"✅ {len(restored_df)} baris kontrak dipulihkan.")
                             st.rerun()
                     except Exception as error:
                         st.error(f"Gagal restore: {error}")
@@ -3417,7 +3598,7 @@ elif active_menu == "☁️ Backup & Restore":
     with col_gs:
         with st.container(border=True):
             st.subheader("📗 Google Sheets")
-            st.caption(f"Kirim seluruh data aktif ke tab `{SHEET_NAME}` melalui Google Apps Script.")
+            st.caption(f"Kirim data kontrak ke tab `{SHEET_NAME}` beserta `sticker_order_log` melalui Google Apps Script.")
             try:
                 backup_url = str(st.secrets.get("GOOGLE_APPS_SCRIPT_URL", "") or "").strip()
             except FileNotFoundError:
@@ -3425,10 +3606,17 @@ elif active_menu == "☁️ Backup & Restore":
             if not backup_url:
                 st.warning("Konfigurasi `GOOGLE_APPS_SCRIPT_URL` belum diatur di Streamlit Secrets.")
             else:
-                st.info(f"Siap mengirim **{len(st.session_state.contracts)}** data outlet (akan menimpa tab tujuan).")
+                st.info(
+                    f"Siap mengirim **{len(st.session_state.contracts)}** data outlet & "
+                    f"**{len(st.session_state.sticker_order_results)}** log pemesanan sticker."
+                )
                 if st.button("⬆️ Backup ke Google Sheet", type="primary", width="stretch"):
                     try:
-                        row_count = backup_to_google_sheet(st.session_state.contracts, backup_url)
-                        st.success(f"✅ {row_count} baris berhasil dikirim ke Google Sheet.")
+                        row_count = backup_to_google_sheet(
+                            st.session_state.contracts,
+                            backup_url,
+                            sticker_order_log=st.session_state.sticker_order_results,
+                        )
+                        st.success(f"✅ {row_count} baris berhasil dikirim ke Google Sheet (termasuk log pemesanan).")
                     except Exception as error:
                         st.error(f"Gagal backup: {error}")
