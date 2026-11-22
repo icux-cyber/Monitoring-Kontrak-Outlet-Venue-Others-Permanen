@@ -30,9 +30,6 @@ DRP_SHEET_NAME = "Pemesanan Layar DRP"
 
 DEFAULT_PEJABAT_EMAILS = [
     "hengky.s.handoko@sumbercipta.com",
-    "stephanus.v.narendra@sumbercipta.com",
-    "daniel.w@sumbercipta.com",
-    "panji.l.sandy@sumbercipta.com",
     "amin.prayogi@sumbercipta.com",
     "mochamad.basori@sumbercipta.com",
 ]
@@ -2169,6 +2166,7 @@ elif active_menu == "👥 Kelola Data Customer":
                             try:
                                 save_data(full_updated)
                                 st.session_state.contracts = normalize_data(full_updated)
+                                _build_master_lookup_maps.clear()
                                 st.session_state.multi_select_all_state = False
                                 st.session_state.pop("multi_customer_data_editor", None)
                                 st.success(f"✅ Berhasil memperbarui kolom **{bulk_target_col}** untuk **{len(target_indices)}** customer sekaligus!")
@@ -2193,6 +2191,7 @@ elif active_menu == "👥 Kelola Data Customer":
                         try:
                             save_data(full_updated)
                             st.session_state.contracts = normalize_data(full_updated)
+                            _build_master_lookup_maps.clear()
                             st.session_state.multi_select_all_state = False
                             st.session_state.pop("multi_customer_data_editor", None)
                             st.success(f"✅ Perubahan pada {len(edited_df)} baris hasil pencarian berhasil disimpan!")
@@ -2218,6 +2217,7 @@ elif active_menu == "👥 Kelola Data Customer":
                         remaining_df = st.session_state.contracts.drop(index=indices_to_drop).reset_index(drop=True)
                         save_data(remaining_df)
                         st.session_state.contracts = normalize_data(remaining_df)
+                        _build_master_lookup_maps.clear()
                         st.session_state.multi_select_all_state = False
                         st.session_state["confirm_delete_multi_cb"] = False
                         st.session_state.pop("multi_customer_data_editor", None)
@@ -2253,6 +2253,7 @@ elif active_menu == "👥 Kelola Data Customer":
                     try:
                         save_data(updated_data)
                         st.session_state.contracts = normalize_data(updated_data)
+                        _build_master_lookup_maps.clear()
                         st.success("✅ Data customer berhasil diperbarui!")
                         st.rerun()
                     except Exception as error:
@@ -2265,6 +2266,7 @@ elif active_menu == "👥 Kelola Data Customer":
                         updated_data = st.session_state.contracts.drop(index=selected_index).reset_index(drop=True)
                         save_data(updated_data)
                         st.session_state.contracts = normalize_data(updated_data)
+                        _build_master_lookup_maps.clear()
                         st.success("Customer berhasil dihapus.")
                         st.rerun()
                     except Exception as error:
@@ -2282,6 +2284,7 @@ elif active_menu == "👥 Kelola Data Customer":
                 try:
                     save_data(updated_data)
                     st.session_state.contracts = normalize_data(updated_data)
+                    _build_master_lookup_maps.clear()
                     st.success("✅ Customer baru berhasil ditambahkan!")
                     st.rerun()
                 except Exception as error:
@@ -2380,6 +2383,7 @@ elif active_menu == "👥 Kelola Data Customer":
                                 save_data(combined)
                                 st.session_state.contracts = normalize_data(combined)
                                 st.session_state.load_warning = None
+                                _build_master_lookup_maps.clear()
                                 st.success(f"✅ Berhasil menambahkan {len(rows_to_add)} customer baru!")
                                 if skipped_ids:
                                     st.info(f"Dilewati ({len(skipped_ids)} ID duplikat): {', '.join(skipped_ids[:15])}")
@@ -2581,6 +2585,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                         save_data(updated_df)
                         st.session_state.contracts = updated_df
                         st.session_state.load_warning = None
+                        _build_master_lookup_maps.clear()
                         st.session_state.sticker_order_results = rec_list + st.session_state.sticker_order_results
                         st.session_state["_last_autofill_alamat_key"] = ""
                         st.success(
@@ -2660,6 +2665,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                         save_data(updated_df)
                         st.session_state.contracts = updated_df
                         st.session_state.load_warning = None
+                        _build_master_lookup_maps.clear()
                         st.session_state.sticker_order_results = rec_list + st.session_state.sticker_order_results
                         st.session_state["_last_autofill_alamat_key"] = ""
                         st.success(
@@ -2762,15 +2768,17 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
         daftar_pejabat = st.session_state.pejabat_emails
         p_col1, p_col2 = st.columns([2, 1.5])
         with p_col1:
-            selected_pejabat = st.multiselect(
-                "Pilih Email Pejabat (Tujuan TO):",
+            selected_cc_pejabat = st.multiselect(
+                "Pilih Email Pejabat (Tujuan CC — To dikosongkan):",
                 options=daftar_pejabat,
-                default=daftar_pejabat,
-                key="pejabat_to_multiselect",
+                default=[
+                    em for em in DEFAULT_PEJABAT_EMAILS if em in daftar_pejabat
+                ] or daftar_pejabat,
+                key="pejabat_cc_multiselect",
             )
         with p_col2:
             manual_pejabat = st.text_input(
-                "Tambah / Ketik Email Pejabat Manual (Opsional)",
+                "Tambah / Ketik Email CC Pejabat Manual (Opsional)",
                 placeholder="nama@perusahaan.com",
                 key="pejabat_manual_input",
             )
@@ -2785,13 +2793,13 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                 st.success("✅ Daftar email pejabat berhasil diperbarui.")
                 st.rerun()
 
-        to_list = list(selected_pejabat)
+        cc_list = list(selected_cc_pejabat)
         for em in re.split(r"[;,]", manual_pejabat):
             clean_em = em.strip()
-            if "@" in clean_em and clean_em not in to_list:
-                to_list.append(clean_em)
+            if "@" in clean_em and clean_em not in cc_list:
+                cc_list.append(clean_em)
 
-        to_str = ", ".join(to_list)
+        cc_str = "; ".join(cc_list)
         ringkasan_baris = "\n".join(
             f"- {r.get('ID Outlet', '-')} | {r.get('Nama Outlet', '-')} | {r.get('Brand', '-')} | {r.get('Version', '-')} | Qty: {r.get('Jumlah Sticker / Vinyl', 0)} | Vendor: {r.get('Nama Vendor', '-')}"
             for _, r in df_order_hasil.head(20).iterrows()
@@ -2807,8 +2815,9 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             "Eka Sulawestara"
         )
         mailto_pejabat_url = (
-            f"mailto:{urllib.parse.quote(to_str)}"
-            f"?subject={urllib.parse.quote(email_subject)}"
+            f"mailto:"
+            f"?cc={urllib.parse.quote(cc_str)}"
+            f"&subject={urllib.parse.quote(email_subject)}"
             f"&body={urllib.parse.quote(email_body)}"
         )
 
@@ -2816,13 +2825,15 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             f"""
             <a href="{mailto_pejabat_url}" target="_blank" style="text-decoration: none;">
                 <div style="background-color: #1D4ED8; color: #FFFFFF; padding: 11px 18px; border-radius: 8px; text-align: center; font-weight: 700; font-size: 15px; margin-top: 8px;">
-                    ✉️ Send To Pejabat ({len(to_list)} penerima)
+                    ✉️ Send To Pejabat (To: Kosong | CC: {len(cc_list)} penerima)
                 </div>
             </a>
             """,
             unsafe_allow_html=True,
         )
-        st.caption("Catatan: Protokol `mailto:` membuka aplikasi email bawaan perangkat Anda (lampiran `.xlsx` / `.png` dapat dilampirkan dari file hasil download di atas).")
+        st.caption(
+            f"Tujuan **To**: *(dikosongkan)* • **CC**: `{cc_str or '-'}`"
+        )
 
 
 # ==========================================
@@ -3402,3 +3413,4 @@ elif active_menu == "☁️ Backup & Restore":
                         st.success(f"✅ {row_count} baris berhasil dikirim ke Google Sheet.")
                     except Exception as error:
                         st.error(f"Gagal backup: {error}")
+```[cite: 1]
