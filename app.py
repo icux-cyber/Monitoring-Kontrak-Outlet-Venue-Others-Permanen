@@ -53,6 +53,7 @@ DATE_COLUMNS = [
 STICKER_ORDER_COLUMNS = [
     "ID Outlet",
     "Nama Outlet",
+    "Alamat",
     "Material",
     "Brand",
     "Version",
@@ -549,7 +550,20 @@ def read_promo_stock_workbook(source) -> pd.DataFrame:
     return out
 
 
+@st.cache_data(show_spinner=False)
+def _cached_initial_promo_stock(file_mtime: float | None, file_path_str: str) -> pd.DataFrame:
+    return _load_initial_promo_stock_impl()
+
+
 def load_initial_promo_stock() -> pd.DataFrame:
+    try:
+        mtime = PROMO_STOCK_FILE.stat().st_mtime if PROMO_STOCK_FILE.exists() else None
+    except Exception:
+        mtime = None
+    return _cached_initial_promo_stock(mtime, str(PROMO_STOCK_FILE))
+
+
+def _load_initial_promo_stock_impl() -> pd.DataFrame:
     if PROMO_STOCK_FILE.exists():
         try:
             return read_promo_stock_workbook(PROMO_STOCK_FILE)
@@ -663,6 +677,7 @@ def apply_sticker_replacement_orders(
     for _, order in orders_df.iterrows():
         raw_id = order.get("ID Outlet", pd.NA)
         raw_name = order.get("Nama Outlet", pd.NA)
+        raw_alamat = order.get("Alamat", pd.NA)
         raw_material = order.get("Material", order.get("Ukuran Sticker", pd.NA))
         raw_brand = order.get("Brand", order.get("Brand Sticker", pd.NA))
         raw_version = order.get("Version", order.get("Versi", pd.NA))
@@ -688,6 +703,7 @@ def apply_sticker_replacement_orders(
 
         size_val = extract_sizes(raw_material)
         mat_txt = safe_text(raw_material)
+        alamat_val = safe_text(raw_alamat) or pd.NA
         brand_val = safe_text(raw_brand) or pd.NA
         version_val = safe_text(raw_version) or pd.NA
         vendor_val = safe_text(raw_vendor) or pd.NA
@@ -696,6 +712,8 @@ def apply_sticker_replacement_orders(
         date_val = parsed_dt.tz_localize(None) if not pd.isna(parsed_dt) else pd.Timestamp(date.today()).normalize()
 
         for r_idx in matched_indices:
+            if pd.notna(alamat_val) and str(alamat_val).strip() != "":
+                target.at[r_idx, "Alamat"] = alamat_val
             if pd.notna(size_val) and str(size_val).strip() != "":
                 target.at[r_idx, "Ukuran Sticker Panel Toko"] = size_val
             if pd.notna(brand_val) and str(brand_val).strip() != "":
@@ -714,6 +732,7 @@ def apply_sticker_replacement_orders(
             matched_records.append({
                 "ID Outlet": safe_text(m_row.get("ID Outlet")) or id_str or "-",
                 "Nama Outlet": safe_text(m_row.get("Nama Customer")) or name_str or "-",
+                "Alamat": safe_text(alamat_val) or safe_text(m_row.get("Alamat")) or "-",
                 "Zona": safe_text(m_row.get("Zona")) or "-",
                 "Material": mat_txt or "-",
                 "Ukuran": safe_text(size_val) or "-",
@@ -751,6 +770,7 @@ def read_sticker_order_excel(source) -> pd.DataFrame:
 
     id_col = pick("ID Outlet", "ID Customer", "Kode Outlet", "Outlet ID")
     name_col = pick("Nama Outlet", "Nama Customer", "Customer Name", "Nama Toko", "Outlet")
+    alamat_col = pick("Alamat", "Alamat Outlet", "Alamat Toko", "Address")
     material_col = pick(
         "Material",
         "Ukuran Sticker",
@@ -775,6 +795,7 @@ def read_sticker_order_excel(source) -> pd.DataFrame:
     df = pd.DataFrame({
         "ID Outlet": id_col,
         "Nama Outlet": name_col,
+        "Alamat": alamat_col,
         "Material": material_col,
         "Brand": brand_col,
         "Version": version_col,
@@ -783,7 +804,7 @@ def read_sticker_order_excel(source) -> pd.DataFrame:
         "Nama Vendor": vendor_col,
     })
 
-    for col in ("ID Outlet", "Nama Outlet", "Material", "Brand", "Version", "Nama Vendor"):
+    for col in ("ID Outlet", "Nama Outlet", "Alamat", "Material", "Brand", "Version", "Nama Vendor"):
         df[col] = df[col].astype("string").str.strip()
         df[col] = df[col].replace({"": pd.NA, "<NA>": pd.NA, "nan": pd.NA, "None": pd.NA})
 
@@ -792,7 +813,7 @@ def read_sticker_order_excel(source) -> pd.DataFrame:
         df["Tanggal OrderPenggantian Sticker / Vinyl"], errors="coerce", dayfirst=True
     ).dt.tz_localize(None)
 
-    has_any = df[["ID Outlet", "Nama Outlet", "Material", "Brand", "Version", "Nama Vendor"]].notna().any(axis=1)
+    has_any = df[["ID Outlet", "Nama Outlet", "Alamat", "Material", "Brand", "Version", "Nama Vendor"]].notna().any(axis=1)
     df = df.loc[has_any.to_numpy(dtype=bool)].reset_index(drop=True)
 
     missing_both_mask = df["ID Outlet"].isna() & df["Nama Outlet"].isna()
@@ -805,7 +826,18 @@ def read_sticker_order_excel(source) -> pd.DataFrame:
     return df
 
 
+@st.cache_data(show_spinner=False)
+def _generate_sticker_order_png_cached(records_json: str, tanggal_order: str, nama_vendor: str) -> bytes:
+    disp = pd.DataFrame(json.loads(records_json)) if records_json else pd.DataFrame()
+    return _generate_sticker_order_png_impl(disp, tanggal_order, nama_vendor)
+
+
 def generate_sticker_order_png(df_table: pd.DataFrame, tanggal_order: str, nama_vendor: str) -> bytes:
+    payload = df_table.to_json(orient="records", date_format="iso", force_ascii=False)
+    return _generate_sticker_order_png_cached(payload, tanggal_order, nama_vendor)
+
+
+def _generate_sticker_order_png_impl(df_table: pd.DataFrame, tanggal_order: str, nama_vendor: str) -> bytes:
     disp = df_table.copy()
     if disp.empty:
         disp = pd.DataFrame(
@@ -2269,99 +2301,181 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
     ])
 
     with tab_sticker_single:
-        stock_options_map: dict[str, pd.Series] = {}
+        # Bangun daftar pilihan gudang secara efisien (hindari iterrows pada dataframe besar)
+        stock_labels: list[str] = ["— Pilih dari List Materi Promosi Gudang (Available) —"]
+        stock_records: dict[str, dict] = {}
         if not promo_stock_df.empty:
-            for idx, s_row in promo_stock_df.iterrows():
-                mat_txt = safe_text(s_row.get("Material"))
-                brd_txt = safe_text(s_row.get("Brand"))
-                ver_txt = safe_text(s_row.get("Version"))
-                avail_num = int(pd.to_numeric(s_row.get("Available"), errors="coerce") or 0)
-                uom_txt = safe_text(s_row.get("UOM"))
-                label = f"{idx + 1}. {mat_txt} | {brd_txt} | {ver_txt} (Available: {avail_num} {uom_txt})".strip()
-                stock_options_map[label] = s_row
+            mat_list = promo_stock_df["Material"].fillna("").astype(str).tolist()
+            brd_list = promo_stock_df["Brand"].fillna("").astype(str).tolist()
+            ver_list = promo_stock_df["Version"].fillna("").astype(str).tolist()
+            avail_list = pd.to_numeric(promo_stock_df["Available"], errors="coerce").fillna(0).astype(int).tolist()
+            uom_list = promo_stock_df["UOM"].fillna("").astype(str).tolist()
+            for idx in range(len(promo_stock_df)):
+                m_s = mat_list[idx].strip()
+                b_s = brd_list[idx].strip()
+                v_s = ver_list[idx].strip()
+                a_i = avail_list[idx]
+                u_s = uom_list[idx].strip()
+                lbl = f"{idx + 1}. {m_s} | {b_s} | {v_s} (Available: {a_i} {u_s})".strip()
+                stock_labels.append(lbl)
+                stock_records[lbl] = {
+                    "Material": m_s,
+                    "Brand": b_s,
+                    "Version": v_s,
+                    "Available": a_i,
+                    "UOM": u_s,
+                }
 
-        select_choices = ["— Pilih dari List Materi Promosi Gudang (Available) —"] + list(stock_options_map.keys())
+        def _on_warehouse_stock_change() -> None:
+            sel_lbl = st.session_state.get("sticker_pick_from_warehouse", "")
+            rec = stock_records.get(sel_lbl)
+            if rec is not None:
+                st.session_state["sticker_order_material"] = rec["Material"]
+                st.session_state["sticker_order_brand"] = rec["Brand"]
+                st.session_state["sticker_order_version"] = rec["Version"]
+                st.session_state["sticker_order_qty"] = max(1, min(1, int(rec["Available"])))
+
         picked_stock_label = st.selectbox(
             "📦 Referensi List Materi Promosi di Gudang Promosi (Available > 0)",
-            options=select_choices,
+            options=stock_labels,
             key="sticker_pick_from_warehouse",
+            on_change=_on_warehouse_stock_change,
         )
 
-        picked_row = stock_options_map.get(picked_stock_label)
-        default_material = safe_text(picked_row.get("Material")) if picked_row is not None else ""
-        default_brand = safe_text(picked_row.get("Brand")) if picked_row is not None else ""
-        default_version = safe_text(picked_row.get("Version")) if picked_row is not None else ""
-        default_avail = int(pd.to_numeric(picked_row.get("Available"), errors="coerce") or 1) if picked_row is not None else 1
-
-        if picked_row is not None:
+        picked_rec = stock_records.get(picked_stock_label)
+        if picked_rec is not None:
             st.info(
-                f"Stok tersedia di Gudang Promosi: **{default_avail} {safe_text(picked_row.get('UOM'))}** — "
-                f"**{default_material}** ({default_brand} • {default_version})"
+                f"Stok tersedia di Gudang Promosi: **{picked_rec['Available']} {picked_rec['UOM']}** — "
+                f"**{picked_rec['Material']}** ({picked_rec['Brand']} • {picked_rec['Version']})"
             )
 
-        with st.form("form_pemesanan_sticker_panel", border=True):
-            st.markdown("##### Detail Pemesanan Penggantian Sticker")
-            col_s1, col_s2 = st.columns([1.2, 2.3])
-            in_id_outlet = col_s1.text_input(
-                "ID Outlet (Opsional)",
-                placeholder="Opsional — contoh: 501X0001",
-                key="sticker_order_id",
+        # Inisialisasi state input form agar auto-fill Alamat berjalan mulus tanpa memicu rerun berat
+        for k_def, v_def in (
+            ("sticker_order_id", ""),
+            ("sticker_order_name", ""),
+            ("sticker_order_alamat", ""),
+            ("sticker_order_material", ""),
+            ("sticker_order_brand", ""),
+            ("sticker_order_version", ""),
+            ("sticker_order_qty", 1),
+            ("sticker_order_vendor", ""),
+            ("_last_autofill_alamat_key", ""),
+        ):
+            if k_def not in st.session_state:
+                st.session_state[k_def] = v_def
+
+        def _resolve_outlet_alamat(id_txt: str, name_txt: str) -> tuple[bool, str]:
+            matched_idx = lookup_master_indices(st.session_state.contracts, id_txt, name_txt)
+            if not matched_idx:
+                return False, ""
+            first_row = st.session_state.contracts.loc[matched_idx[0]]
+            return True, safe_text(first_row.get("Alamat"))
+
+        # Cek otomatis saat ID Outlet atau Nama Outlet berubah
+        cur_id_val = str(st.session_state.get("sticker_order_id", "")).strip()
+        cur_name_val = str(st.session_state.get("sticker_order_name", "")).strip()
+        lookup_sig = f"{cur_id_val.casefold()}||{cur_name_val.casefold()}"
+        if lookup_sig != st.session_state.get("_last_autofill_alamat_key", ""):
+            st.session_state["_last_autofill_alamat_key"] = lookup_sig
+            if cur_id_val or cur_name_val:
+                found_m, auto_addr = _resolve_outlet_alamat(cur_id_val, cur_name_val)
+                if found_m:
+                    st.session_state["sticker_order_alamat"] = auto_addr
+                else:
+                    st.session_state["sticker_order_alamat"] = ""
+            else:
+                st.session_state["sticker_order_alamat"] = ""
+
+        st.markdown("##### Detail Pemesanan Penggantian Sticker")
+        col_s1, col_s2 = st.columns([1.2, 2.3])
+        in_id_outlet = col_s1.text_input(
+            "ID Outlet (Opsional)",
+            placeholder="Opsional — contoh: 501X0001",
+            key="sticker_order_id",
+        )
+        in_nama_outlet = col_s2.text_input(
+            "Nama Outlet",
+            placeholder="Contoh: TOKO CONTOH 1 (wajib diisi jika ID Outlet kosong)",
+            key="sticker_order_name",
+        )
+
+        # Evaluasi status pencocokan ID / Nama Outlet untuk Alamat otomatis vs manual
+        has_outlet_input = bool(in_id_outlet.strip() or in_nama_outlet.strip())
+        is_outlet_found, resolved_alamat_val = (
+            _resolve_outlet_alamat(in_id_outlet.strip(), in_nama_outlet.strip())
+            if has_outlet_input
+            else (False, "")
+        )
+
+        if has_outlet_input and is_outlet_found:
+            st.caption(
+                "✅ ID / Nama Outlet cocok dengan Master Data: kolom **Alamat** terisi otomatis "
+                f"(`{resolved_alamat_val or 'Kosong di master — dapat dilengkapi'}`)."
             )
-            in_nama_outlet = col_s2.text_input(
-                "Nama Outlet",
-                placeholder="Contoh: TOKO CONTOH 1 (wajib diisi jika ID Outlet kosong)",
-                key="sticker_order_name",
+        elif has_outlet_input and not is_outlet_found:
+            st.caption(
+                "⚠️ ID / Nama Outlet belum cocok atau tidak ditemukan di Master Data: "
+                "silakan isi **Alamat** secara manual."
             )
 
-            col_s3, col_s4, col_s5 = st.columns([1.6, 1.3, 1.4])
-            in_material = col_s3.text_input(
-                "Material",
-                value=default_material,
-                placeholder="Contoh: Vinyl Panel Toko 1 x 2 m (BL)",
-                key=f"sticker_order_material_{picked_stock_label}",
-            )
-            in_brand = col_s4.text_input(
-                "Brand",
-                value=default_brand,
-                placeholder="Contoh: DJARUM BLACK MATCHA KRETEK",
-                key=f"sticker_order_brand_{picked_stock_label}",
-            )
-            in_version = col_s5.text_input(
-                "Version",
-                value=default_version,
-                placeholder="Opsional — contoh: Matcha Powder - Rp 17.000/12 btg",
-                key=f"sticker_order_version_{picked_stock_label}",
-            )
+        in_alamat_outlet = st.text_input(
+            "Alamat",
+            placeholder=(
+                "Otomatis terisi jika ID / Nama Outlet cocok..."
+                if is_outlet_found
+                else "Isi Alamat secara manual (jika ID / Nama Outlet tidak ada atau salah)..."
+            ),
+            key="sticker_order_alamat",
+        )
 
-            col_s6, col_s7, col_s8 = st.columns([1.0, 1.2, 1.3])
-            in_jumlah = col_s6.number_input(
-                "Jumlah Sticker / Vinyl",
-                min_value=0,
-                step=1,
-                value=min(1, default_avail) if picked_row is not None else 1,
-                key=f"sticker_order_qty_{picked_stock_label}",
-            )
-            in_tgl_order = col_s7.date_input(
-                "Tanggal OrderPenggantian Sticker / Vinyl",
-                value=date.today(),
-                key="sticker_order_date",
-            )
-            in_nama_vendor = col_s8.text_input(
-                "Nama Vendor",
-                placeholder="Contoh: ARTISTIC atau 77 ADVERTISING",
-                key="sticker_order_vendor",
-            )
+        col_s3, col_s4, col_s5 = st.columns([1.6, 1.3, 1.4])
+        in_material = col_s3.text_input(
+            "Material",
+            placeholder="Contoh: Vinyl Panel Toko 1 x 2 m (BL)",
+            key="sticker_order_material",
+        )
+        in_brand = col_s4.text_input(
+            "Brand",
+            placeholder="Contoh: DJARUM BLACK MATCHA KRETEK",
+            key="sticker_order_brand",
+        )
+        in_version = col_s5.text_input(
+            "Version",
+            placeholder="Opsional — contoh: Matcha Powder - Rp 17.000/12 btg",
+            key="sticker_order_version",
+        )
 
-            st.markdown("")
-            submitted_sticker = st.form_submit_button(
-                "💾 Simpan & Update Data Customer",
-                type="primary",
-                width="stretch",
-            )
+        col_s6, col_s7, col_s8 = st.columns([1.0, 1.2, 1.3])
+        in_jumlah = col_s6.number_input(
+            "Jumlah Sticker / Vinyl",
+            min_value=0,
+            step=1,
+            key="sticker_order_qty",
+        )
+        in_tgl_order = col_s7.date_input(
+            "Tanggal OrderPenggantian Sticker / Vinyl",
+            value=date.today(),
+            key="sticker_order_date",
+        )
+        in_nama_vendor = col_s8.text_input(
+            "Nama Vendor",
+            placeholder="Contoh: ARTISTIC atau 77 ADVERTISING",
+            key="sticker_order_vendor",
+        )
+
+        st.markdown("")
+        submitted_sticker = st.button(
+            "💾 Simpan & Update Data Customer",
+            type="primary",
+            width="stretch",
+            key="btn_submit_sticker_single",
+        )
 
         if submitted_sticker:
             if not in_id_outlet.strip() and not in_nama_outlet.strip():
                 st.error("⚠️ Isi minimal **ID Outlet** atau **Nama Outlet** untuk melakukan lookup ke Master Data Dashboard.")
+            elif not in_alamat_outlet.strip():
+                st.error("⚠️ Kolom **Alamat** wajib diisi (otomatis jika ID/Nama Outlet benar, atau isi manual jika tidak ada/salah).")
             else:
                 matched_check = lookup_master_indices(
                     st.session_state.contracts,
@@ -2377,6 +2491,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                     order_row = pd.DataFrame([{
                         "ID Outlet": in_id_outlet.strip() or pd.NA,
                         "Nama Outlet": in_nama_outlet.strip() or pd.NA,
+                        "Alamat": in_alamat_outlet.strip() or pd.NA,
                         "Material": in_material.strip() or pd.NA,
                         "Brand": in_brand.strip() or pd.NA,
                         "Version": in_version.strip() or pd.NA,
@@ -2409,6 +2524,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             {
                 "ID Outlet": "501X0001",
                 "Nama Outlet": "TOKO CONTOH 1",
+                "Alamat": "JALAN RAYA KARANG TURI RT 24 RW 8",
                 "Material": "Vinyl Panel Toko 1 x 2 m (BL)",
                 "Brand": "DJARUM BLACK MATCHA KRETEK",
                 "Version": "Matcha Powder - Rp 17.000/12 btg",
@@ -2417,8 +2533,9 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                 "Nama Vendor": "ARTISTIC",
             },
             {
-                "ID Outlet": "",
+                "ID Outlet": "S50113D250917120644415",
                 "Nama Outlet": "TOKO CONTOH 2",
+                "Alamat": "JALAN RAYA INTAN P38 BLOK 12D",
                 "Material": "Sticker Panel Toko 1 x 2 m",
                 "Brand": "LA LIGHTS",
                 "Version": "Cat Eyes",
@@ -2649,6 +2766,7 @@ elif active_menu == "📦 List Materi Promosi":
                     parsed_stock = read_promo_stock_workbook(promo_upload)
                     DATA_DIR.mkdir(parents=True, exist_ok=True)
                     parsed_stock.to_excel(PROMO_STOCK_FILE, sheet_name="PRCRG01", index=False, engine="openpyxl")
+                    _cached_initial_promo_stock.clear()
                     st.session_state.promo_stock = parsed_stock
                     st.success(f"✅ Berhasil memuat **{len(parsed_stock)}** item materi Sticker/Vinyl Panel Toko yang Available.")
                     st.rerun()
