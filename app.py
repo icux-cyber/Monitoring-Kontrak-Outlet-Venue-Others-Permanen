@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import io
 import json
 import re
+import urllib.parse
 from datetime import date
 from io import BytesIO
 from pathlib import Path
 
+import matplotlib.patches as patches
+import matplotlib.pyplot as plt
 import pandas as pd
 import requests
 import streamlit as st
@@ -17,8 +21,18 @@ APP_TITLE = "Monitoring Kontrak Outlet"
 DATA_DIR = Path("data")
 DATA_FILE = DATA_DIR / "DRP & Outlet MCD - DSO Surabaya Barat.xlsx"
 PROMO_STOCK_FILE = DATA_DIR / "PRCRG01_Gudang_Promosi.xlsx"
+PEJABAT_EMAIL_FILE = DATA_DIR / "master_email_pejabat.xlsx"
 SHEET_NAME = "Monitoring Kontrak Outlet"
 DRP_SHEET_NAME = "Pemesanan Layar DRP"
+
+DEFAULT_PEJABAT_EMAILS = [
+    "hengky.s.handoko@sumbercipta.com",
+    "stephanus.v.narendra@sumbercipta.com",
+    "daniel.w@sumbercipta.com",
+    "panji.l.sandy@sumbercipta.com",
+    "amin.prayogi@sumbercipta.com",
+    "mochamad.basori@sumbercipta.com",
+]
 
 MATERIAL_COLUMNS = ["Panel Toko", "Showcase", "Layar Toko", "Shop Sign / Neon Box"]
 SYNC_PANEL_SCREEN_COLUMNS = [
@@ -271,6 +285,17 @@ def _as_1d_series(obj, index: pd.Index) -> pd.Series:
     return pd.Series(obj, index=index)
 
 
+def safe_text(value) -> str:
+    if pd.isna(value):
+        return ""
+    text = str(value).strip()
+    return "" if text.casefold() in {"<na>", "nan", "none"} else text
+
+
+def safe_date(value):
+    return None if pd.isna(value) else pd.Timestamp(value).date()
+
+
 def parse_amount(value):
     if pd.isna(value) or str(value).strip() == "":
         return pd.NA
@@ -320,9 +345,6 @@ def parse_material(value, column: str) -> bool:
 
 
 def extract_sizes(value):
-    """
-    Mengambil hanya ukuran dimensi (contoh: 'Vinyl Panel Toko 1 x 2 m (BL)' -> '1 x 2 m').
-    """
     if pd.isna(value) or str(value).strip() == "":
         return pd.NA
     text = str(value).strip()
@@ -350,6 +372,8 @@ def customer_id_key(value) -> str:
     if pd.isna(value):
         return ""
     key = str(value).strip()
+    if key.casefold() in {"", "<na>", "nan", "none"}:
+        return ""
     if re.fullmatch(r"\d+\.0", key):
         key = key[:-2]
     return key.casefold()
@@ -376,12 +400,49 @@ def is_sticker_or_vinyl_panel_toko(value) -> bool:
     )
 
 
+def load_pejabat_emails() -> list[str]:
+    emails: list[str] = []
+    if PEJABAT_EMAIL_FILE.exists():
+        try:
+            df_p = pd.read_excel(PEJABAT_EMAIL_FILE, sheet_name=0, engine="openpyxl")
+            for col in df_p.columns:
+                for val in df_p[col].dropna().astype(str):
+                    for part in re.split(r"[;,]", val):
+                        em = part.strip()
+                        if "@" in em and em not in emails:
+                            emails.append(em)
+        except Exception:
+            pass
+    if not emails:
+        try:
+            sec_val = st.secrets.get("PEJABAT_EMAILS", "")
+            if isinstance(sec_val, (list, tuple)):
+                raw_items = [str(x) for x in sec_val]
+            else:
+                raw_items = re.split(r"[;,]", str(sec_val))
+            for item in raw_items:
+                em = item.strip()
+                if "@" in em and em not in emails:
+                    emails.append(em)
+        except Exception:
+            pass
+    if not emails:
+        emails = list(DEFAULT_PEJABAT_EMAILS)
+    return emails
+
+
+def save_pejabat_emails(emails: list[str]) -> None:
+    cleaned = []
+    for item in emails:
+        for part in re.split(r"[;,]", str(item)):
+            em = part.strip()
+            if "@" in em and em not in cleaned:
+                cleaned.append(em)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"Email Pejabat": cleaned}).to_excel(PEJABAT_EMAIL_FILE, index=False, engine="openpyxl")
+
+
 def read_promo_stock_workbook(source) -> pd.DataFrame:
-    """
-    Membaca laporan stok Gudang Promosi (PRCRG01) dan menyaring:
-    - Stok Available > 0
-    - Material mengandung 'Sticker Panel Toko' dan/atau 'Vinyl Panel Toko'
-    """
     empty_cols = [
         "Storage Location",
         "Material Group",
@@ -561,26 +622,44 @@ def normalize_data(frame: pd.DataFrame) -> pd.DataFrame:
     return normalized.loc[has_data.to_numpy(dtype=bool)].reset_index(drop=True)
 
 
+def lookup_master_indices(
+    master_df: pd.DataFrame,
+    id_outlet_val,
+    nama_outlet_val,
+) -> list[int]:
+    """
+    Mencari kecocokan pada master data dashboard:
+    - Jika ID Outlet diisi: cocokkan berdasarkan ID Outlet.
+    - Jika ID Outlet kosong namun Nama Outlet diisi: cocokkan berdasarkan Nama Customer.
+    """
+    k_id = customer_id_key(id_outlet_val)
+    k_name = normalize_name_key(nama_outlet_val)
+
+    id_keys = master_df["ID Outlet"].map(customer_id_key)
+    name_keys = master_df["Nama Customer"].map(normalize_name_key)
+
+    if k_id:
+        matched = [int(idx) for idx, k in id_keys.items() if k == k_id]
+        if matched:
+            return matched
+        if k_name:
+            return [int(idx) for idx, k in name_keys.items() if k == k_name]
+        return []
+
+    if k_name:
+        return [int(idx) for idx, k in name_keys.items() if k == k_name]
+
+    return []
+
+
 def apply_sticker_replacement_orders(
     contracts: pd.DataFrame,
     orders_df: pd.DataFrame,
-) -> tuple[pd.DataFrame, int, int, list[str]]:
+    strict_master_lookup: bool = True,
+) -> tuple[pd.DataFrame, int, list[dict], list[str]]:
     target = normalize_data(contracts).copy()
-    id_keys = target["ID Outlet"].map(customer_id_key)
-    name_keys = target["Nama Customer"].map(normalize_name_key)
-
-    id_to_rows: dict[str, list[int]] = {}
-    for idx, k in id_keys.items():
-        if k:
-            id_to_rows.setdefault(k, []).append(idx)
-
-    name_to_rows: dict[str, list[int]] = {}
-    for idx, k in name_keys.items():
-        if k:
-            name_to_rows.setdefault(k, []).append(idx)
-
     updated_rows_set: set[int] = set()
-    created_count = 0
+    matched_records: list[dict] = []
     unmatched_labels: list[str] = []
 
     for _, order in orders_df.iterrows():
@@ -589,65 +668,71 @@ def apply_sticker_replacement_orders(
         raw_material = order.get("Material", order.get("Ukuran Sticker", pd.NA))
         raw_brand = order.get("Brand", order.get("Brand Sticker", pd.NA))
         raw_version = order.get("Version", order.get("Versi", pd.NA))
+        raw_qty = order.get("Jumlah Sticker / Vinyl", 1)
         raw_vendor = order.get("Nama Vendor", pd.NA)
         raw_date = order.get(
             "Tanggal OrderPenggantian Sticker / Vinyl",
             order.get("Tanggal Penggantian Sticker Panel", pd.NaT),
         )
 
-        id_str = "" if pd.isna(raw_id) else str(raw_id).strip()
-        name_str = "" if pd.isna(raw_name) else str(raw_name).strip()
+        id_str = safe_text(raw_id)
+        name_str = safe_text(raw_name)
         if not id_str and not name_str:
             continue
 
+        matched_indices = lookup_master_indices(target, id_str, name_str)
+        label = f"ID: {id_str or '-'} | Nama: {name_str or '-'}"
+
+        if not matched_indices:
+            unmatched_labels.append(label)
+            if strict_master_lookup:
+                continue
+
         size_val = extract_sizes(raw_material)
-        brand_val = (
-            str(raw_brand).strip()
-            if pd.notna(raw_brand) and str(raw_brand).strip() not in {"", "<NA>", "nan", "None"}
-            else pd.NA
-        )
-        version_val = (
-            str(raw_version).strip()
-            if pd.notna(raw_version) and str(raw_version).strip() not in {"", "<NA>", "nan", "None"}
-            else pd.NA
-        )
-        vendor_val = (
-            str(raw_vendor).strip()
-            if pd.notna(raw_vendor) and str(raw_vendor).strip() not in {"", "<NA>", "nan", "None"}
-            else pd.NA
-        )
+        mat_txt = safe_text(raw_material)
+        brand_val = safe_text(raw_brand) or pd.NA
+        version_val = safe_text(raw_version) or pd.NA
+        vendor_val = safe_text(raw_vendor) or pd.NA
+        qty_num = int(pd.to_numeric(raw_qty, errors="coerce") or 0)
         parsed_dt = pd.to_datetime(raw_date, errors="coerce", dayfirst=True)
         date_val = parsed_dt.tz_localize(None) if not pd.isna(parsed_dt) else pd.Timestamp(date.today()).normalize()
 
-        matched_indices: list[int] = []
-        k_id = customer_id_key(id_str)
-        k_name = normalize_name_key(name_str)
+        for r_idx in matched_indices:
+            if pd.notna(size_val) and str(size_val).strip() != "":
+                target.at[r_idx, "Ukuran Sticker Panel Toko"] = size_val
+            if pd.notna(brand_val) and str(brand_val).strip() != "":
+                target.at[r_idx, "Brand Panel"] = brand_val
+            if pd.notna(version_val) and str(version_val).strip() != "":
+                target.at[r_idx, "Versi"] = version_val
+            if pd.notna(vendor_val) and str(vendor_val).strip() != "":
+                target.at[r_idx, "Nama Vendor"] = vendor_val
+            if not pd.isna(date_val):
+                target.at[r_idx, "Tanggal Penggantian Sticker Panel"] = date_val
+            if (pd.notna(size_val) and str(size_val).strip() != "") or (pd.notna(brand_val) and str(brand_val).strip() != ""):
+                target.at[r_idx, "Panel Toko"] = True
+            updated_rows_set.add(r_idx)
 
-        if k_id and k_id in id_to_rows:
-            matched_indices = id_to_rows[k_id]
-        elif k_name and k_name in name_to_rows:
-            matched_indices = name_to_rows[k_name]
+            m_row = target.loc[r_idx]
+            matched_records.append({
+                "ID Outlet": safe_text(m_row.get("ID Outlet")) or id_str or "-",
+                "Nama Outlet": safe_text(m_row.get("Nama Customer")) or name_str or "-",
+                "Zona": safe_text(m_row.get("Zona")) or "-",
+                "Material": mat_txt or "-",
+                "Ukuran": safe_text(size_val) or "-",
+                "Brand": safe_text(brand_val) or "-",
+                "Version": safe_text(version_val) or "-",
+                "Jumlah Sticker / Vinyl": qty_num,
+                "Tanggal OrderPenggantian Sticker / Vinyl": date_val.strftime("%d/%m/%Y") if not pd.isna(date_val) else "-",
+                "Nama Vendor": safe_text(vendor_val) or "-",
+            })
 
-        if matched_indices:
-            for r_idx in matched_indices:
-                if pd.notna(size_val) and str(size_val).strip() != "":
-                    target.at[r_idx, "Ukuran Sticker Panel Toko"] = size_val
-                if pd.notna(brand_val) and str(brand_val).strip() != "":
-                    target.at[r_idx, "Brand Panel"] = brand_val
-                if pd.notna(version_val) and str(version_val).strip() != "":
-                    target.at[r_idx, "Versi"] = version_val
-                if pd.notna(vendor_val) and str(vendor_val).strip() != "":
-                    target.at[r_idx, "Nama Vendor"] = vendor_val
-                if not pd.isna(date_val):
-                    target.at[r_idx, "Tanggal Penggantian Sticker Panel"] = date_val
-                if (pd.notna(size_val) and str(size_val).strip() != "") or (pd.notna(brand_val) and str(brand_val).strip() != ""):
-                    target.at[r_idx, "Panel Toko"] = True
-                updated_rows_set.add(r_idx)
-        else:
-            label = f"{id_str} - {name_str}".strip(" -")
-            unmatched_labels.append(label)
+    if strict_master_lookup and unmatched_labels:
+        raise ValueError(
+            "Data tidak ditemukan pada Master Data Dashboard sehingga pemesanan tidak dapat disimpan:\n• "
+            + "\n• ".join(unmatched_labels)
+        )
 
-    return normalize_data(target), len(updated_rows_set), created_count, unmatched_labels
+    return normalize_data(target), len(updated_rows_set), matched_records, unmatched_labels
 
 
 def read_sticker_order_excel(source) -> pd.DataFrame:
@@ -704,7 +789,7 @@ def read_sticker_order_excel(source) -> pd.DataFrame:
         df[col] = df[col].astype("string").str.strip()
         df[col] = df[col].replace({"": pd.NA, "<NA>": pd.NA, "nan": pd.NA, "None": pd.NA})
 
-    df["Jumlah Sticker / Vinyl"] = pd.to_numeric(df["Jumlah Sticker / Vinyl"], errors="coerce")
+    df["Jumlah Sticker / Vinyl"] = pd.to_numeric(df["Jumlah Sticker / Vinyl"], errors="coerce").fillna(1)
     df["Tanggal OrderPenggantian Sticker / Vinyl"] = pd.to_datetime(
         df["Tanggal OrderPenggantian Sticker / Vinyl"], errors="coerce", dayfirst=True
     ).dt.tz_localize(None)
@@ -712,12 +797,74 @@ def read_sticker_order_excel(source) -> pd.DataFrame:
     has_any = df[["ID Outlet", "Nama Outlet", "Material", "Brand", "Version", "Nama Vendor"]].notna().any(axis=1)
     df = df.loc[has_any.to_numpy(dtype=bool)].reset_index(drop=True)
 
-    missing_id_mask = df["ID Outlet"].isna()
-    if missing_id_mask.any():
-        bad_rows = [str(i + 2) for i in df.index[missing_id_mask]]
-        raise ValueError(f"Kolom 'ID Outlet' wajib diisi pada baris Excel: {', '.join(bad_rows)}.")
+    missing_both_mask = df["ID Outlet"].isna() & df["Nama Outlet"].isna()
+    if missing_both_mask.any():
+        bad_rows = [str(i + 2) for i in df.index[missing_both_mask]]
+        raise ValueError(
+            f"Isi minimal 'ID Outlet' atau 'Nama Outlet' untuk pencocokan master data pada baris Excel: {', '.join(bad_rows)}."
+        )
 
     return df
+
+
+def generate_sticker_order_png(df_table: pd.DataFrame, tanggal_order: str, nama_vendor: str) -> bytes:
+    disp = df_table.copy()
+    if disp.empty:
+        disp = pd.DataFrame(columns=["ID Outlet", "Nama Outlet", "Material", "Brand", "Version", "Jumlah Sticker / Vinyl", "Tanggal OrderPenggantian Sticker / Vinyl", "Nama Vendor"])
+
+    col_max_lengths = []
+    for col in disp.columns:
+        max_len = max([len(str(col))] + [len(str(v)) for v in disp[col].values])
+        col_max_lengths.append(max(max_len, 6))
+
+    total_len = sum(col_max_lengths) or 1
+    col_widths = [w / total_len for w in col_max_lengths]
+
+    num_rows = len(disp)
+    fig_width = max(18, len(disp.columns) * 2.1)
+    fig_height = max(3.6, (num_rows + 3.5) * 0.45)
+
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    ax.axis("off")
+
+    ax.add_patch(patches.Rectangle((0.0, 0.86), 1.0, 0.11, facecolor="#0F172A", edgecolor="#000000", lw=1))
+    ax.text(
+        0.015,
+        0.915,
+        f"HASIL PEMESANAN PENGGANTIAN STICKER / VINYL PANEL TOKO   |   Tanggal: {tanggal_order}   |   Vendor: {nama_vendor or 'Semua'}",
+        ha="left",
+        va="center",
+        fontsize=10,
+        weight="bold",
+        color="#FFFFFF",
+    )
+
+    table = ax.table(
+        cellText=disp.values,
+        colLabels=disp.columns,
+        loc="center",
+        bbox=[0.0, 0.03, 1.0, 0.80],
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(8.5)
+
+    for (row, col), cell in table.get_celld().items():
+        cell.set_width(col_widths[col])
+        cell.set_edgecolor("#000000")
+        cell.set_linewidth(0.8)
+        if row == 0:
+            cell.set_facecolor("#1E3A8A")
+            cell.set_text_props(color="#FFFFFF", weight="bold", ha="center", va="center")
+        else:
+            bg = "#FFFFFF" if row % 2 == 1 else "#F8FAFC"
+            cell.set_facecolor(bg)
+            cell.set_text_props(color="#0F172A", weight="bold" if col in (0, 1) else "normal", ha="left" if col in (1, 2, 4) else "center")
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.15, dpi=250)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
 
 
 def merge_panel_screen_by_id(
@@ -1350,14 +1497,6 @@ def save_data(frame: pd.DataFrame) -> None:
     normalized.to_excel(DATA_FILE, sheet_name=SHEET_NAME, index=False, engine="openpyxl")
 
 
-def safe_text(value) -> str:
-    return "" if pd.isna(value) else str(value)
-
-
-def safe_date(value):
-    return None if pd.isna(value) else pd.Timestamp(value).date()
-
-
 def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool, dict]:
     suffix = "new" if row_index is None else f"row_{row_index}"
     with st.form(f"outlet_form_{suffix}", border=True):
@@ -1457,6 +1596,12 @@ if "contracts" not in st.session_state:
 
 if "promo_stock" not in st.session_state:
     st.session_state.promo_stock = load_initial_promo_stock()
+
+if "pejabat_emails" not in st.session_state:
+    st.session_state.pejabat_emails = load_pejabat_emails()
+
+if "sticker_order_results" not in st.session_state:
+    st.session_state.sticker_order_results = []
 
 if "multi_select_all_state" not in st.session_state:
     st.session_state.multi_select_all_state = False
@@ -1579,7 +1724,6 @@ if active_menu == "📊 Dashboard & Monitoring":
         if critical_count:
             alert_col2.warning(f"⚠️ **{critical_count} kontrak** memasuki masa kritis (berakhir dalam ≤ 30 hari).")
 
-    # PENCARIAN & FILTER + TOMBOL RESET
     head_f, head_rst = st.columns([4, 1])
     with head_f:
         st.markdown("### 🔍 Pencarian & Filter Data")
@@ -2102,8 +2246,8 @@ elif active_menu == "👥 Kelola Data Customer":
 elif active_menu == "🏷️ Pemesanan Sticker Panel":
     st.markdown("### 🏷️ Pemesanan Penggantian Sticker Panel")
     st.caption(
-        "**ID Outlet** wajib diisi, sedangkan **Nama Outlet** opsional. "
-        "Materi dapat dipilih langsung dari **List Materi Promosi di Gudang Promosi** (yang berstatus `Available > 0` untuk `Sticker Panel Toko` / `Vinyl Panel Toko`)."
+        "**ID Outlet** bersifat **opsional** (boleh dikosongkan jika mengisi **Nama Outlet**). "
+        "Setiap pemesanan akan di-*lookup* ke **Master Data Dashboard** — jika tidak ditemukan, pemesanan **tidak dapat disimpan**."
     )
 
     tab_sticker_single, tab_sticker_batch = st.tabs([
@@ -2146,13 +2290,13 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             st.markdown("##### Detail Pemesanan Penggantian Sticker")
             col_s1, col_s2 = st.columns([1.2, 2.3])
             in_id_outlet = col_s1.text_input(
-                "ID Outlet *",
-                placeholder="Wajib diisi — contoh: 501X0001",
+                "ID Outlet (Opsional)",
+                placeholder="Opsional — contoh: 501X0001",
                 key="sticker_order_id",
             )
             in_nama_outlet = col_s2.text_input(
-                "Nama Outlet (Opsional)",
-                placeholder="Opsional — contoh: TOKO CONTOH 1",
+                "Nama Outlet",
+                placeholder="Contoh: TOKO CONTOH 1 (wajib diisi jika ID Outlet kosong)",
                 key="sticker_order_name",
             )
 
@@ -2203,86 +2347,51 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             )
 
         if submitted_sticker:
-            if not in_id_outlet.strip():
-                st.error("⚠️ **ID Outlet** wajib diisi.")
+            if not in_id_outlet.strip() and not in_nama_outlet.strip():
+                st.error("⚠️ Isi minimal **ID Outlet** atau **Nama Outlet** untuk melakukan lookup ke Master Data Dashboard.")
             else:
-                order_row = pd.DataFrame([{
-                    "ID Outlet": in_id_outlet.strip(),
-                    "Nama Outlet": in_nama_outlet.strip() or pd.NA,
-                    "Material": in_material.strip() or pd.NA,
-                    "Brand": in_brand.strip() or pd.NA,
-                    "Version": in_version.strip() or pd.NA,
-                    "Jumlah Sticker / Vinyl": int(in_jumlah),
-                    "Tanggal OrderPenggantian Sticker / Vinyl": pd.Timestamp(in_tgl_order) if in_tgl_order else pd.Timestamp(date.today()),
-                    "Nama Vendor": in_nama_vendor.strip() or pd.NA,
-                }])
-                try:
-                    updated_df, upd_cnt, _, _ = apply_sticker_replacement_orders(
-                        st.session_state.contracts, order_row
+                matched_check = lookup_master_indices(
+                    st.session_state.contracts,
+                    in_id_outlet.strip(),
+                    in_nama_outlet.strip(),
+                )
+                if not matched_check:
+                    st.error(
+                        f"❌ Data (**ID Outlet**: `{in_id_outlet.strip() or '-'}` | **Nama Outlet**: `{in_nama_outlet.strip() or '-'}`) "
+                        "tidak ditemukan pada **Master Data Dashboard**. Pemesanan **tidak dapat disimpan**."
                     )
-                    if upd_cnt == 0:
-                        st.warning(
-                            f"⚠️ ID Outlet **`{in_id_outlet.strip()}`** tidak ditemukan pada data customer yang ada. "
-                            "Pastikan ID Outlet sesuai dengan data customer."
+                else:
+                    order_row = pd.DataFrame([{
+                        "ID Outlet": in_id_outlet.strip() or pd.NA,
+                        "Nama Outlet": in_nama_outlet.strip() or pd.NA,
+                        "Material": in_material.strip() or pd.NA,
+                        "Brand": in_brand.strip() or pd.NA,
+                        "Version": in_version.strip() or pd.NA,
+                        "Jumlah Sticker / Vinyl": int(in_jumlah),
+                        "Tanggal OrderPenggantian Sticker / Vinyl": pd.Timestamp(in_tgl_order) if in_tgl_order else pd.Timestamp(date.today()),
+                        "Nama Vendor": in_nama_vendor.strip() or pd.NA,
+                    }])
+                    try:
+                        updated_df, upd_cnt, rec_list, _ = apply_sticker_replacement_orders(
+                            st.session_state.contracts,
+                            order_row,
+                            strict_master_lookup=True,
                         )
-                    else:
                         save_data(updated_df)
                         st.session_state.contracts = updated_df
                         st.session_state.load_warning = None
-                        parsed_sz = extract_sizes(in_material) if in_material.strip() else "-"
+                        st.session_state.sticker_order_results = rec_list + st.session_state.sticker_order_results
                         st.success(
-                            f"✅ Berhasil mengupdate **{upd_cnt}** data customer untuk ID **`{in_id_outlet.strip()}`** "
-                            f"(Dimensi terbaca: `{parsed_sz}`, Qty: `{int(in_jumlah)}`). Data sudah terupdate di **Semua Data Customer Terfilter**."
+                            f"✅ Lookup cocok dengan Master Data Dashboard: berhasil mengupdate **{upd_cnt}** baris customer "
+                            f"dan menambahkan hasil pemesanan ke tabel di bawah."
                         )
                         st.rerun()
-                except Exception as error:
-                    st.error(f"Gagal menyimpan pemesanan penggantian sticker: {error}")
-
-        st.markdown("##### Riwayat Penggantian Sticker Panel Terbaru")
-        sticker_history = contracts[
-            contracts["Tanggal Penggantian Sticker Panel"].notna()
-            | contracts["Ukuran Sticker Panel Toko"].notna()
-            | contracts["Brand Panel"].notna()
-            | contracts["Versi"].notna()
-            | contracts["Nama Vendor"].notna()
-        ].copy()
-        if sticker_history.empty:
-            st.info("Belum ada data penggantian sticker panel yang tercatat.")
-        else:
-            sticker_history = sticker_history.sort_values(
-                "Tanggal Penggantian Sticker Panel", ascending=False, na_position="last"
-            )
-            hist_cols = [
-                "ID Outlet",
-                "Nama Customer",
-                "Zona",
-                "Ukuran Sticker Panel Toko",
-                "Brand Panel",
-                "Versi",
-                "Tanggal Penggantian Sticker Panel",
-                "Nama Vendor",
-            ]
-            hist_disp = sticker_history[hist_cols].copy()
-            hist_disp["Tanggal Penggantian Sticker Panel"] = pd.to_datetime(
-                hist_disp["Tanggal Penggantian Sticker Panel"], errors="coerce"
-            ).map(lambda d: "" if pd.isna(d) else d.strftime("%d/%m/%Y"))
-            st.dataframe(
-                hist_disp,
-                use_container_width=True,
-                hide_index=True,
-                height=300,
-                column_config={
-                    "Nama Customer": st.column_config.TextColumn("Nama Outlet", width="large"),
-                    "Ukuran Sticker Panel Toko": st.column_config.TextColumn("Ukuran Sticker", width="medium"),
-                    "Brand Panel": st.column_config.TextColumn("Brand", width="medium"),
-                    "Versi": st.column_config.TextColumn("Version", width="medium"),
-                    "Tanggal Penggantian Sticker Panel": st.column_config.TextColumn("Tanggal OrderPenggantian Sticker / Vinyl", width="medium"),
-                    "Nama Vendor": st.column_config.TextColumn("Nama Vendor", width="medium"),
-                },
-            )
+                    except Exception as error:
+                        st.error(f"Gagal menyimpan pemesanan penggantian sticker: {error}")
 
     with tab_sticker_batch:
         st.markdown("##### Langkah 1: Download Template Excel Penggantian Sticker Panel")
+        st.caption("Kolom **ID Outlet** pada template bersifat opsional jika **Nama Outlet** diisi, dan keduanya tetap diverifikasi terhadap Master Data Dashboard.")
         sticker_sample = pd.DataFrame([
             {
                 "ID Outlet": "501X0001",
@@ -2295,8 +2404,8 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                 "Nama Vendor": "ARTISTIC",
             },
             {
-                "ID Outlet": "S50113D250917120644415",
-                "Nama Outlet": "",
+                "ID Outlet": "",
+                "Nama Outlet": "TOKO CONTOH 2",
                 "Material": "Sticker Panel Toko 1 x 2 m",
                 "Brand": "LA LIGHTS",
                 "Version": "Cat Eyes",
@@ -2339,25 +2448,168 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                     if orders_df.empty:
                         st.warning("Tidak ditemukan baris data pemesanan pada file Excel.")
                     else:
-                        updated_df, upd_cnt, _, unmatched = apply_sticker_replacement_orders(
-                            st.session_state.contracts, orders_df
+                        updated_df, upd_cnt, rec_list, _ = apply_sticker_replacement_orders(
+                            st.session_state.contracts,
+                            orders_df,
+                            strict_master_lookup=True,
                         )
-                        if upd_cnt > 0:
-                            save_data(updated_df)
-                            st.session_state.contracts = updated_df
-                            st.session_state.load_warning = None
+                        save_data(updated_df)
+                        st.session_state.contracts = updated_df
+                        st.session_state.load_warning = None
+                        st.session_state.sticker_order_results = rec_list + st.session_state.sticker_order_results
                         st.success(
-                            f"✅ Proses selesai: **{upd_cnt}** baris data customer terupdate di **Semua Data Customer Terfilter** "
+                            f"✅ Seluruh baris cocok dengan Master Data Dashboard: **{upd_cnt}** baris customer terupdate "
                             f"(dari **{len(orders_df)}** baris pemesanan)."
                         )
-                        if unmatched:
-                            st.warning(
-                                f"⚠️ **{len(unmatched)}** baris tidak ditemukan kecocokan ID Outlet: {', '.join(unmatched[:20])}"
-                            )
-                        if upd_cnt > 0:
-                            st.rerun()
+                        st.rerun()
                 except Exception as error:
-                    st.error(f"Gagal memproses file Excel penggantian sticker: {error}")
+                    st.error(f"❌ Gagal memproses & menyimpan file Excel: {error}")
+
+    # ==========================================
+    # HASIL PEMESANAN, DOWNLOAD (.XLSX & .PNG) & SEND TO PEJABAT
+    # ==========================================
+    st.divider()
+    st.markdown("### 📋 Hasil Pemesanan & Kirim ke Pejabat")
+
+    if st.session_state.sticker_order_results:
+        df_order_hasil = pd.DataFrame(st.session_state.sticker_order_results)
+    else:
+        hist_src = contracts[
+            contracts["Tanggal Penggantian Sticker Panel"].notna()
+            | contracts["Ukuran Sticker Panel Toko"].notna()
+            | contracts["Brand Panel"].notna()
+            | contracts["Versi"].notna()
+            | contracts["Nama Vendor"].notna()
+        ].copy()
+        if hist_src.empty:
+            df_order_hasil = pd.DataFrame(
+                columns=[
+                    "ID Outlet",
+                    "Nama Outlet",
+                    "Zona",
+                    "Material",
+                    "Ukuran",
+                    "Brand",
+                    "Version",
+                    "Jumlah Sticker / Vinyl",
+                    "Tanggal OrderPenggantian Sticker / Vinyl",
+                    "Nama Vendor",
+                ]
+            )
+        else:
+            hist_src = hist_src.sort_values("Tanggal Penggantian Sticker Panel", ascending=False, na_position="last")
+            df_order_hasil = pd.DataFrame({
+                "ID Outlet": hist_src["ID Outlet"].map(lambda x: safe_text(x) or "-"),
+                "Nama Outlet": hist_src["Nama Customer"].map(lambda x: safe_text(x) or "-"),
+                "Zona": hist_src["Zona"].map(lambda x: safe_text(x) or "-"),
+                "Material": hist_src["Ukuran Sticker Panel Toko"].map(lambda x: f"Sticker / Vinyl Panel Toko {safe_text(x)}" if safe_text(x) else "-"),
+                "Ukuran": hist_src["Ukuran Sticker Panel Toko"].map(lambda x: safe_text(x) or "-"),
+                "Brand": hist_src["Brand Panel"].map(lambda x: safe_text(x) or "-"),
+                "Version": hist_src["Versi"].map(lambda x: safe_text(x) or "-"),
+                "Jumlah Sticker / Vinyl": 1,
+                "Tanggal OrderPenggantian Sticker / Vinyl": pd.to_datetime(
+                    hist_src["Tanggal Penggantian Sticker Panel"], errors="coerce"
+                ).map(lambda d: "" if pd.isna(d) else d.strftime("%d/%m/%Y")),
+                "Nama Vendor": hist_src["Nama Vendor"].map(lambda x: safe_text(x) or "-"),
+            })
+
+    if df_order_hasil.empty:
+        st.info("Belum ada hasil pemesanan penggantian sticker / vinyl panel.")
+    else:
+        st.dataframe(df_order_hasil, use_container_width=True, hide_index=True, height=300)
+
+        first_row = df_order_hasil.iloc[0]
+        tgl_ringkas = safe_text(first_row.get("Tanggal OrderPenggantian Sticker / Vinyl")) or date.today().strftime("%d/%m/%Y")
+        vendor_ringkas = safe_text(first_row.get("Nama Vendor")) or "Semua Vendor"
+        png_hasil = generate_sticker_order_png(df_order_hasil, tgl_ringkas, vendor_ringkas)
+
+        with st.expander("🖼️ Preview Hasil Gambar Pemesanan (.PNG)", expanded=False):
+            st.image(png_hasil, caption="Hasil Pemesanan Penggantian Sticker / Vinyl Panel", use_container_width=True)
+
+        dl_ex_col, dl_png_col, clr_col = st.columns([1.4, 1.4, 1])
+        dl_ex_col.download_button(
+            "📥 Download Hasil (.xlsx)",
+            data=excel_bytes(df_order_hasil, sheet_name="Hasil Pemesanan Sticker"),
+            file_name=f"Hasil_Pemesanan_Sticker_Panel_{date.today().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+        dl_png_col.download_button(
+            "🖼️ Download Hasil (.png)",
+            data=png_hasil,
+            file_name=f"Hasil_Pemesanan_Sticker_Panel_{date.today().strftime('%Y%m%d')}.png",
+            mime="image/png",
+            use_container_width=True,
+        )
+        if clr_col.button("🧹 Reset Daftar Sesi Ini", use_container_width=True, key="btn_clear_order_session"):
+            st.session_state.sticker_order_results = []
+            st.rerun()
+
+        st.markdown("#### ✉️ Kirim Hasil Pemesanan ke Pejabat")
+        daftar_pejabat = st.session_state.pejabat_emails
+        p_col1, p_col2 = st.columns([2, 1.5])
+        with p_col1:
+            selected_pejabat = st.multiselect(
+                "Pilih Email Pejabat (Tujuan TO):",
+                options=daftar_pejabat,
+                default=daftar_pejabat,
+                key="pejabat_to_multiselect",
+            )
+        with p_col2:
+            manual_pejabat = st.text_input(
+                "Tambah / Ketik Email Pejabat Manual (Opsional)",
+                placeholder="nama@perusahaan.com",
+                key="pejabat_manual_input",
+            )
+            if st.button("➕ Simpan ke Daftar Pejabat", key="btn_save_pejabat_email"):
+                merged_list = list(daftar_pejabat)
+                for em in re.split(r"[;,]", manual_pejabat):
+                    clean_em = em.strip()
+                    if "@" in clean_em and clean_em not in merged_list:
+                        merged_list.append(clean_em)
+                save_pejabat_emails(merged_list)
+                st.session_state.pejabat_emails = merged_list
+                st.success("✅ Daftar email pejabat berhasil diperbarui.")
+                st.rerun()
+
+        to_list = list(selected_pejabat)
+        for em in re.split(r"[;,]", manual_pejabat):
+            clean_em = em.strip()
+            if "@" in clean_em and clean_em not in to_list:
+                to_list.append(clean_em)
+
+        to_str = ", ".join(to_list)
+        ringkasan_baris = "\n".join(
+            f"- {r.get('ID Outlet', '-')} | {r.get('Nama Outlet', '-')} | {r.get('Brand', '-')} | {r.get('Version', '-')} | Qty: {r.get('Jumlah Sticker / Vinyl', 0)} | Vendor: {r.get('Nama Vendor', '-')}"
+            for _, r in df_order_hasil.head(20).iterrows()
+        )
+        email_subject = f"Pemesanan Penggantian Sticker / Vinyl Panel Toko - {tgl_ringkas}"
+        email_body = (
+            "Yth. Bapak/Ibu Pejabat,\n\n"
+            f"Berikut hasil pemesanan penggantian Sticker / Vinyl Panel Toko ({len(df_order_hasil)} item):\n\n"
+            f"{ringkasan_baris}\n\n"
+            "Mohon lampiran file Excel (.xlsx) dan gambar (.png) yang telah diunduh disertakan pada email ini.\n\n"
+            "Terima kasih.\n"
+            "Hormat kami,\n"
+            "Eka Sulawestara"
+        )
+        mailto_pejabat_url = (
+            f"mailto:{urllib.parse.quote(to_str)}"
+            f"?subject={urllib.parse.quote(email_subject)}"
+            f"&body={urllib.parse.quote(email_body)}"
+        )
+
+        st.markdown(
+            f"""
+            <a href="{mailto_pejabat_url}" target="_blank" style="text-decoration: none;">
+                <div style="background-color: #1D4ED8; color: #FFFFFF; padding: 11px 18px; border-radius: 8px; text-align: center; font-weight: 700; font-size: 15px; margin-top: 8px;">
+                    ✉️ Send To Pejabat ({len(to_list)} penerima)
+                </div>
+            </a>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.caption("Catatan: Protokol `mailto:` membuka aplikasi email bawaan perangkat Anda (lampiran `.xlsx` / `.png` dapat dilampirkan dari file hasil download di atas).")
 
 
 # ==========================================
