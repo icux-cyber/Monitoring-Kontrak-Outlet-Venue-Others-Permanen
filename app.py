@@ -82,7 +82,7 @@ st.set_page_config(
 )
 
 
-def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:  # <-- diubah
+def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     if df is None:
         return pd.DataFrame(columns=COLUMNS)
     out = df.copy()
@@ -228,9 +228,9 @@ def reset_sticker_single_form() -> None:
 
 
 def set_contracts_state(df: pd.DataFrame, already_normalized: bool = False) -> pd.DataFrame:
-    ensured = _ensure_columns(df)  # <-- diubah
+    ensured = _ensure_columns(df)
     normalized = ensured if already_normalized else normalize_data(ensured)
-    attached = _ensure_columns(attach_search_blob(normalized))  # <-- diubah
+    attached = _ensure_columns(attach_search_blob(normalized))
     st.session_state.contracts = attached
     st.session_state.pop("_master_lookup_cache", None)
     st.session_state.pop("sticker_order_png_bytes", None)
@@ -371,14 +371,14 @@ inject_custom_css()
 
 if "contracts" not in st.session_state:
     initial, warning = load_initial_data()
-    st.session_state.contracts = _ensure_columns(initial)  # <-- diubah
+    st.session_state.contracts = _ensure_columns(initial)
     st.session_state.load_warning = warning
 else:
-    st.session_state.contracts = _ensure_columns(st.session_state.contracts)  # <-- diubah
+    st.session_state.contracts = _ensure_columns(st.session_state.contracts)
     if "_search_blob" not in st.session_state.contracts.columns:
         st.session_state.contracts = _ensure_columns(
             attach_search_blob(normalize_data(st.session_state.contracts))
-        )  # <-- diubah
+        )
 
 if "promo_stock" not in st.session_state:
     st.session_state.promo_stock = load_initial_promo_stock()
@@ -392,7 +392,7 @@ if "sticker_order_results" not in st.session_state:
 if "multi_select_all_state" not in st.session_state:
     st.session_state.multi_select_all_state = False
 
-contracts = _ensure_columns(compute_contract_status(st.session_state.contracts))  # <-- diubah
+contracts = _ensure_columns(compute_contract_status(st.session_state.contracts))
 promo_stock_df = st.session_state.promo_stock
 expired_count = int(contracts["Status Kontrak"].eq("🔴 Expired").sum())
 critical_count = int(contracts["Status Kontrak"].eq("🟠 Kritis (≤ 30 hari)").sum())
@@ -669,7 +669,7 @@ elif active_menu == "👥 Kelola Data Customer":
                     st.session_state.pop("multi_customer_data_editor", None)
                     st.rerun()
 
-                filtered_multi = _ensure_columns(filtered_multi)  # <-- diubah
+                filtered_multi = _ensure_columns(filtered_multi)
                 editor_df = filtered_multi[COLUMNS].copy()
                 editor_df.insert(0, "Pilih", bool(st.session_state.multi_select_all_state))
 
@@ -746,15 +746,15 @@ elif active_menu == "👥 Kelola Data Customer":
                     if not target_indices:
                         st.warning("⚠️ Klik **Centang Semua** atau centang minimal 1 baris pada kolom **Pilih** terlebih dahulu.")
                     else:
-                        full_updated = _ensure_columns(st.session_state.contracts)[COLUMNS].copy()  # <-- diubah
+                        full_updated = _ensure_columns(st.session_state.contracts)[COLUMNS].copy()
                         for orig_idx in edited_df.index:
                             for col in COLUMNS:
-                                if orig_idx in full_updated.index and col in edited_df.columns:  # <-- diubah
+                                if orig_idx in full_updated.index and col in edited_df.columns:
                                     full_updated.at[orig_idx, col] = edited_df.at[orig_idx, col]
 
                         val_to_set = pd.Timestamp(bulk_new_val) if bulk_target_col in DATE_COLUMNS else bulk_new_val
                         for orig_idx in target_indices:
-                            if orig_idx in full_updated.index:  # <-- diubah
+                            if orig_idx in full_updated.index:
                                 full_updated.at[orig_idx, bulk_target_col] = val_to_set
 
                         try:
@@ -772,10 +772,10 @@ elif active_menu == "👥 Kelola Data Customer":
                 act_col1.info(f"💡 Terpilih: **{selected_rows_count}** dari **{len(edited_df)}** baris pada hasil pencarian ini.")
 
                 if act_col2.button("💾 Simpan Perubahan Tabel", type="primary", width="stretch", key="btn_save_multi_table"):
-                    full_updated = _ensure_columns(st.session_state.contracts)[COLUMNS].copy()  # <-- diubah
+                    full_updated = _ensure_columns(st.session_state.contracts)[COLUMNS].copy()
                     for orig_idx in edited_df.index:
                         for col in COLUMNS:
-                            if orig_idx in full_updated.index and col in edited_df.columns:  # <-- diubah
+                            if orig_idx in full_updated.index and col in edited_df.columns:
                                 full_updated.at[orig_idx, col] = edited_df.at[orig_idx, col]
 
                     try:
@@ -831,7 +831,7 @@ elif active_menu == "👥 Kelola Data Customer":
             submitted, updated_record = render_outlet_form(contracts.loc[selected_index], selected_index)
 
             if submitted:
-                updated_data = _ensure_columns(contracts)[COLUMNS].copy()  # <-- diubah
+                updated_data = _ensure_columns(contracts)[COLUMNS].copy()
                 for column, value in updated_record.items():
                     updated_data.at[selected_index, column] = value
                 try:
@@ -858,7 +858,7 @@ elif active_menu == "👥 Kelola Data Customer":
         blank_record = pd.Series({column: pd.NA for column in COLUMNS})
         submitted, new_record = render_outlet_form(blank_record, None)
         if submitted:
-            base_contracts = _ensure_columns(contracts)[COLUMNS]  # <-- diubah
+            base_contracts = _ensure_columns(contracts)[COLUMNS]
             updated_data = pd.concat([base_contracts, pd.DataFrame([new_record])], ignore_index=True)
             try:
                 saved_df = save_data(updated_data)
@@ -893,12 +893,13 @@ elif active_menu == "👥 Kelola Data Customer":
                 "Ukuran Sticker Panel Toko": "1 x 2 m",
                 "Brand Panel": "Djarum Super",
                 "Versi": "V1",
-                "Tanggal Penggantian Sticker Panel": pd.Timestamp(date.today()),
+                "Tanggal Penggantian Sticker / Vinyl Panel": pd.Timestamp(date.today()),
                 "Nama Vendor": "ARTISTIC",
                 "Ukuran Layar": pd.NA,
                 "Brand Layar": pd.NA,
             }]
         )
+        sample_row_ready = _ensure_columns(sample_row)[COLUMNS]  # <-- diubah
         dl1, dl2 = st.columns(2)
         dl1.download_button(
             "📄 Template Kosong (.xlsx)",
@@ -909,7 +910,7 @@ elif active_menu == "👥 Kelola Data Customer":
         )
         dl2.download_button(
             "📝 Template + Contoh Pengisian (.xlsx)",
-            data=excel_bytes(sample_row[COLUMNS]),
+            data=excel_bytes(sample_row_ready),  # <-- diubah
             file_name="Template_Tambah_Customer_Baru_Contoh.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width="stretch",
@@ -932,8 +933,8 @@ elif active_menu == "👥 Kelola Data Customer":
                     if new_rows.empty:
                         st.warning("Tidak ditemukan baris data valid pada file Excel.")
                     else:
-                        base_contracts = _ensure_columns(contracts)[COLUMNS]  # <-- diubah
-                        new_rows_ensured = _ensure_columns(new_rows)  # <-- diubah
+                        base_contracts = _ensure_columns(contracts)[COLUMNS]
+                        new_rows_ensured = _ensure_columns(new_rows)
                         existing_keys = {
                             customer_id_key(val)
                             for val in base_contracts["ID Outlet"].dropna()
@@ -1603,7 +1604,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                 try:
                     branding_data = read_branding_workbook(branding_upload)
                     updated, unmatched, duplicates, updated_count = apply_branding_updates(
-                        _ensure_columns(st.session_state.contracts),  # <-- diubah
+                        _ensure_columns(st.session_state.contracts),
                         branding_data,
                         already_normalized=True,
                     )
@@ -1710,7 +1711,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                     "otomatis diambil baris dengan tanggal akhir kontrak terbaru."
                 )
 
-            base_contracts_drp = _ensure_columns(st.session_state.contracts)  # <-- diubah
+            base_contracts_drp = _ensure_columns(st.session_state.contracts)
             mismatch_df, matched_ok_df, missing_df = build_drp_crosscheck_report(
                 base_contracts_drp,
                 drp_source_df,
@@ -2002,7 +2003,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                         sync_upload.seek(0)
                         source_frame = read_workbook(sync_upload)
                     merged_df, updated_cnt, missing_list = merge_panel_screen_by_id(
-                        _ensure_columns(st.session_state.contracts),  # <-- diubah
+                        _ensure_columns(st.session_state.contracts),
                         source_frame,
                         overwrite_existing=overwrite_sync,
                         already_normalized=True,
@@ -2038,7 +2039,7 @@ elif active_menu == "☁️ Backup & Restore":
                 if b1.button("⬆️ Backup Sekarang", type="primary", width="stretch", key="btn_backup_supabase"):
                     try:
                         saved_cnt = backup_to_supabase(
-                            _ensure_columns(st.session_state.contracts),  # <-- diubah
+                            _ensure_columns(st.session_state.contracts),
                             sb_url,
                             sb_key,
                             sb_table,
@@ -2054,7 +2055,7 @@ elif active_menu == "☁️ Backup & Restore":
                 if b2.button("⬇️ Restore Data", type="secondary", width="stretch", key="btn_restore_supabase"):
                     try:
                         restored_df, restored_log = restore_from_supabase(sb_url, sb_key, sb_table)
-                        saved_df = save_data(_ensure_columns(restored_df))  # <-- diubah
+                        saved_df = save_data(_ensure_columns(restored_df))
                         set_contracts_state(saved_df, already_normalized=True)
                         st.session_state.load_warning = None
                         if restored_log is not None:
@@ -2079,7 +2080,7 @@ elif active_menu == "☁️ Backup & Restore":
                 if st.button("⬆️ Backup ke Google Sheet", type="primary", width="stretch"):
                     try:
                         row_count = backup_to_google_sheet(
-                            _ensure_columns(st.session_state.contracts),  # <-- diubah
+                            _ensure_columns(st.session_state.contracts),
                             backup_url,
                             sticker_order_log=st.session_state.sticker_order_results,
                             already_normalized=True,
