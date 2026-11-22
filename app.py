@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import json
 import re
-import textwrap
 import urllib.parse
 import warnings
 from datetime import date
@@ -1016,6 +1015,44 @@ def read_sticker_order_excel(source) -> pd.DataFrame:
     return df
 
 
+def _wrap_line_pure(text: str, width: int) -> list[str]:
+    clean_text = "" if text is None else str(text)
+    if clean_text == "":
+        return [""]
+    limit = int(width)
+    if limit < 1:
+        limit = 1
+
+    words = clean_text.split(" ")
+    lines: list[str] = []
+    current = ""
+
+    for word in words:
+        if len(word) > limit:
+            if current:
+                lines.append(current)
+                current = ""
+            for start in range(0, len(word), limit):
+                chunk = word[start : start + limit]
+                if len(chunk) == limit:
+                    lines.append(chunk)
+                else:
+                    current = chunk
+            continue
+
+        if not current:
+            current = word
+        elif len(current) + 1 + len(word) <= limit:
+            current = f"{current} {word}"
+        else:
+            lines.append(current)
+            current = word
+
+    if current or not lines:
+        lines.append(current)
+    return lines
+
+
 @st.cache_data(show_spinner=False)
 def _generate_sticker_order_png_cached(records_json: str, tanggal_order: str, nama_vendor: str) -> bytes:
     disp = pd.DataFrame(json.loads(records_json)) if records_json else pd.DataFrame()
@@ -1050,42 +1087,59 @@ def _generate_sticker_order_png_impl(df_table: pd.DataFrame, tanggal_order: str,
             ]
         )
 
+    col_names = [str(c) for c in disp.columns]
     col_max_chars: list[int] = []
+
     for col in disp.columns:
-        header_w = int(len(str(col)))
-        sample_vals = [int(len(line)) for v in disp[col].values for line in str(v).splitlines()] or [0]
-        longest_token = int(max([len(tok) for v in disp[col].values for tok in str(v).split()] or [4]))
-        natural_w = int(max([header_w, *sample_vals, 8]))
-        capped_w = int(min(max(natural_w, min(longest_token + 2, 16)), 42))
+        header_w = len(str(col))
+        raw_col_strings = ["" if pd.isna(v) else str(v) for v in disp[col].tolist()]
+        line_lengths = [
+            len(line)
+            for s in raw_col_strings
+            for line in s.splitlines()
+        ]
+        token_lengths = [
+            len(tok)
+            for s in raw_col_strings
+            for tok in s.split()
+        ]
+        max_line_w = max(line_lengths) if line_lengths else 0
+        longest_token = max(token_lengths) if token_lengths else 4
+        natural_w = max(header_w, max_line_w, 8)
+        min_needed = min(longest_token + 2, 16)
+        capped_w = int(min(max(natural_w, min_needed, 8), 42))
         col_max_chars.append(capped_w)
 
-    total_chars = int(sum(col_max_chars)) or 1
+    total_chars = int(sum(col_max_chars))
+    if total_chars <= 0:
+        total_chars = 1
     col_widths = [float(w) / float(total_chars) for w in col_max_chars]
 
     wrapped_rows: list[list[str]] = []
     row_line_counts: list[int] = [1]
-    for row_vals in disp.values:
+
+    for _, row_series in disp.iterrows():
         wrapped_cell_lines: list[list[str]] = []
         max_lines_in_row = 1
-        for c_idx, val in enumerate(row_vals):
+        row_list = row_series.tolist()
+
+        for c_idx in range(len(col_names)):
+            val = row_list[c_idx] if c_idx < len(row_list) else ""
             txt = "" if pd.isna(val) else str(val)
-            wrap_width = int(max(int(col_max_chars[c_idx]), 8))
-            lines: list[str] = []
-            for para in (txt.splitlines() or [""]):
-                para_str = str(para)
-                wrapped = textwrap.wrap(
-                    para_str,
-                    width=wrap_width,
-                    break_long_words=True,
-                    break_hyphens=False,
-                )
-                lines.extend(wrapped or [""])
-            wrapped_cell_lines.append(lines)
-            if len(lines) > max_lines_in_row:
-                max_lines_in_row = len(lines)
+            wrap_width = int(col_max_chars[c_idx]) if col_max_chars[c_idx] >= 8 else 8
+
+            cell_lines: list[str] = []
+            paras = txt.splitlines() if txt != "" else [""]
+            for para in paras:
+                cell_lines.extend(_wrap_line_pure(str(para), wrap_width))
+
+            wrapped_cell_lines.append(cell_lines)
+            if len(cell_lines) > max_lines_in_row:
+                max_lines_in_row = len(cell_lines)
+
         row_line_counts.append(int(max_lines_in_row))
         wrapped_rows.append([
-            "\n".join(wrapped_cell_lines[c_idx]) for c_idx in range(len(disp.columns))
+            "\n".join(wrapped_cell_lines[c_idx]) for c_idx in range(len(col_names))
         ])
 
     total_lines = int(sum(row_line_counts))
@@ -1107,10 +1161,10 @@ def _generate_sticker_order_png_impl(df_table: pd.DataFrame, tanggal_order: str,
         color="#FFFFFF",
     )
 
-    table_display = pd.DataFrame(wrapped_rows, columns=disp.columns) if wrapped_rows else disp
+    cell_text = wrapped_rows if wrapped_rows else [["-"] * len(col_names)]
     table = ax.table(
-        cellText=table_display.values if not table_display.empty else [["-"] * len(disp.columns)],
-        colLabels=disp.columns,
+        cellText=cell_text,
+        colLabels=col_names,
         loc="center",
         bbox=[0.0, 0.02, 1.0, 0.83],
     )
