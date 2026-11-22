@@ -300,7 +300,6 @@ def parse_material(value, column: str) -> bool:
 def extract_sizes(value):
     """
     Mengambil hanya ukuran dimensi (contoh: 'Sticker Panel Toko 1 x 2 m' -> '1 x 2 m').
-    Jika tidak ada pola dimensi 'angka x angka m', mengembalikan teks apa adanya (jika bukan label generik).
     """
     if pd.isna(value) or str(value).strip() == "":
         return pd.NA
@@ -398,13 +397,6 @@ def apply_sticker_replacement_orders(
     contracts: pd.DataFrame,
     orders_df: pd.DataFrame,
 ) -> tuple[pd.DataFrame, int, int, list[str]]:
-    """
-    Menerapkan pemesanan penggantian sticker panel ke data kontrak (master data outlet).
-    - Mencocokkan berdasarkan ID Outlet (jika diisi), atau Nama Outlet (jika ID Outlet kosong / tidak cocok).
-    - Mengambil hanya ukuran dari 'Ukuran Sticker' (misal 'Sticker Panel Toko 1 x 2 m' -> '1 x 2 m').
-    - Mengupdate 'Ukuran Sticker Panel Toko', 'Brand Panel', 'Versi' (jika diisi), dan 'Tanggal Penggantian Sticker Panel'.
-    - Mengaktifkan 'Panel Toko' = True bila ukuran atau brand sticker terisi.
-    """
     target = normalize_data(contracts).copy()
     id_keys = target["ID Outlet"].map(customer_id_key)
     name_keys = target["Nama Customer"].map(normalize_name_key)
@@ -480,7 +472,6 @@ def apply_sticker_replacement_orders(
 
 
 def read_sticker_order_excel(source) -> pd.DataFrame:
-    """Membaca file Excel pemesanan penggantian sticker panel massal."""
     if hasattr(source, "seek"):
         source.seek(0)
     raw = pd.read_excel(source, sheet_name=0, header=0)
@@ -680,7 +671,6 @@ def read_branding_workbook(source) -> pd.DataFrame:
 
 
 def read_drp_crosscheck_workbook(source) -> pd.DataFrame:
-    """Membaca file report list DRP (misal CODPR03 (DRP).xlsx atau sheet sejenis)."""
     if hasattr(source, "seek"):
         source.seek(0)
     excel_file = pd.ExcelFile(source)
@@ -1915,7 +1905,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
     st.caption(
         "Catat pemesanan penggantian sticker panel secara satuan maupun massal (Excel). "
         "Ukuran sticker/vinyl hanya akan dibaca dimensinya saja (contoh: `Sticker Panel Toko 1 x 2 m` → `1 x 2 m`), "
-        "lalu **Ukuran Sticker**, **Brand Sticker**, **Versi** (opsional), dan **Tanggal Penggantian** langsung terupdate ke **Semua Data Customer Terfilter**."
+        "lalu **Ukuran Sticker**, **Brand Sticker**, **Versi** (opsional), dan **Tanggal Penggantian Sticker Panel** langsung terupdate ke **Semua Data Customer Terfilter**."
     )
 
     tab_sticker_single, tab_sticker_batch = st.tabs([
@@ -1928,34 +1918,34 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             st.markdown("##### Detail Pemesanan Penggantian Sticker")
             col_s1, col_s2 = st.columns([1.2, 2.3])
             in_id_outlet = col_s1.text_input(
-                "ID Outlet (Opsional)",
-                placeholder="Contoh: 501X1234",
+                "ID Outlet",
+                placeholder="Opsional — contoh: 501X0001",
                 key="sticker_order_id",
             )
             in_nama_outlet = col_s2.text_input(
                 "Nama Outlet *",
-                placeholder="Wajib diisi — contoh: TOKO SUMBER REJEKI",
+                placeholder="Wajib diisi — contoh: TOKO CONTOH 1",
                 key="sticker_order_name",
             )
 
             col_s3, col_s4, col_s5, col_s6 = st.columns([1.4, 1.3, 1.0, 1.2])
             in_ukuran_sticker = col_s3.text_input(
-                "Ukuran Sticker / Vinyl",
+                "Ukuran Sticker",
                 placeholder="Contoh: Sticker Panel Toko 1 x 2 m atau 1 x 2 m",
                 key="sticker_order_size",
             )
             in_brand_sticker = col_s4.text_input(
                 "Brand Sticker",
-                placeholder="Contoh: Djarum Super / 76 Aksara",
+                placeholder="Contoh: Djarum Super",
                 key="sticker_order_brand",
             )
             in_versi_sticker = col_s5.text_input(
-                "Versi (Opsional)",
-                placeholder="Contoh: V1 / V2",
+                "Versi",
+                placeholder="Opsional — contoh: V1",
                 key="sticker_order_version",
             )
             in_tgl_ganti = col_s6.date_input(
-                "Tanggal Penggantian",
+                "Tanggal Penggantian Sticker Panel",
                 value=date.today(),
                 key="sticker_order_date",
             )
@@ -2037,7 +2027,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                     "Ukuran Sticker Panel Toko": st.column_config.TextColumn("Ukuran Sticker", width="medium"),
                     "Brand Panel": st.column_config.TextColumn("Brand Sticker", width="medium"),
                     "Versi": st.column_config.TextColumn("Versi", width="small"),
-                    "Tanggal Penggantian Sticker Panel": st.column_config.TextColumn("Tgl Penggantian Terakhir", width="medium"),
+                    "Tanggal Penggantian Sticker Panel": st.column_config.TextColumn("Tanggal Penggantian Sticker Panel", width="medium"),
                 },
             )
 
