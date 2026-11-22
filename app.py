@@ -261,6 +261,16 @@ def clean_headers(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def _as_1d_series(obj, index: pd.Index) -> pd.Series:
+    if isinstance(obj, pd.DataFrame):
+        if obj.shape[1] == 0:
+            return pd.Series(pd.NA, index=index)
+        return obj.iloc[:, 0].reindex(index)
+    if isinstance(obj, pd.Series):
+        return obj.reindex(index)
+    return pd.Series(obj, index=index)
+
+
 def parse_amount(value):
     if pd.isna(value) or str(value).strip() == "":
         return pd.NA
@@ -372,19 +382,27 @@ def read_promo_stock_workbook(source) -> pd.DataFrame:
     - Stok Available > 0
     - Material mengandung 'Sticker Panel Toko' dan/atau 'Vinyl Panel Toko'
     """
+    empty_cols = [
+        "Storage Location",
+        "Material Group",
+        "Material",
+        "Brand",
+        "Version",
+        "Available",
+        "UOM",
+        "Status Material",
+    ]
     if hasattr(source, "seek"):
         source.seek(0)
 
-    excel_file = pd.ExcelFile(source)
+    excel_file = pd.ExcelFile(source, engine="openpyxl")
     sheet = "PRCRG01" if "PRCRG01" in excel_file.sheet_names else excel_file.sheet_names[0]
 
     if hasattr(source, "seek"):
         source.seek(0)
-    raw = pd.read_excel(source, sheet_name=sheet, header=None)
+    raw = pd.read_excel(source, sheet_name=sheet, header=None, engine="openpyxl")
     if raw.empty:
-        return pd.DataFrame(
-            columns=["Storage Location", "Material Group", "Material", "Brand", "Version", "Available", "UOM", "Status Material"]
-        )
+        return pd.DataFrame(columns=empty_cols)
 
     header_row_idx = None
     for r_idx in range(min(len(raw), 15)):
@@ -407,15 +425,16 @@ def read_promo_stock_workbook(source) -> pd.DataFrame:
             else:
                 col_names.append(s_top)
 
-        data_df = raw.iloc[header_row_idx + 2:].copy()
+        data_df = raw.iloc[header_row_idx + 2 :].copy()
         data_df.columns = col_names
         data_df = data_df.dropna(how="all").reset_index(drop=True)
-        lowered = {c.casefold(): c for c in data_df.columns}
 
-        def pick_col(*candidates):
+        def pick_col(*candidates) -> pd.Series:
             for cand in candidates:
-                if cand.casefold() in lowered:
-                    return data_df[lowered[cand.casefold()]]
+                c_low = cand.casefold()
+                for idx_c, col_name in enumerate(data_df.columns):
+                    if str(col_name).strip().casefold() == c_low:
+                        return _as_1d_series(data_df.iloc[:, idx_c], data_df.index)
             return pd.Series(pd.NA, index=data_df.index)
 
         out = pd.DataFrame({
@@ -431,13 +450,16 @@ def read_promo_stock_workbook(source) -> pd.DataFrame:
     else:
         if hasattr(source, "seek"):
             source.seek(0)
-        simple_df = clean_headers(pd.read_excel(source, sheet_name=sheet, header=0))
-        lowered = {c.casefold(): c for c in simple_df.columns}
+        simple_df = clean_headers(
+            pd.read_excel(source, sheet_name=sheet, header=0, engine="openpyxl")
+        ).reset_index(drop=True)
 
-        def pick_simple(*candidates):
+        def pick_simple(*candidates) -> pd.Series:
             for cand in candidates:
-                if cand.casefold() in lowered:
-                    return simple_df[lowered[cand.casefold()]]
+                c_low = cand.casefold()
+                for idx_c, col_name in enumerate(simple_df.columns):
+                    if str(col_name).strip().casefold() == c_low:
+                        return _as_1d_series(simple_df.iloc[:, idx_c], simple_df.index)
             return pd.Series(pd.NA, index=simple_df.index)
 
         out = pd.DataFrame({
@@ -452,15 +474,14 @@ def read_promo_stock_workbook(source) -> pd.DataFrame:
         })
 
     for col in ("Storage Location", "Material Group", "Material", "Brand", "Version", "UOM", "Status Material"):
-        out[col] = out[col].astype("string").str.strip()
-        out[col] = out[col].replace({"": pd.NA, "<NA>": pd.NA, "nan": pd.NA, "None": pd.NA})
+        s = _as_1d_series(out[col], out.index).astype("string").str.strip()
+        out[col] = s.replace({"": pd.NA, "<NA>": pd.NA, "nan": pd.NA, "None": pd.NA})
 
-    out["Available"] = pd.to_numeric(out["Available"], errors="coerce").fillna(0)
-    out = out[
-        out["Material"].notna()
-        & (out["Available"] > 0)
-        & out["Material"].map(is_sticker_or_vinyl_panel_toko)
-    ].reset_index(drop=True)
+    avail_num = pd.to_numeric(_as_1d_series(out["Available"], out.index), errors="coerce").fillna(0)
+    out["Available"] = avail_num
+    mask_mat = out["Material"].map(is_sticker_or_vinyl_panel_toko).fillna(False).to_numpy(dtype=bool)
+    mask_avail = (out["Available"] > 0).to_numpy(dtype=bool)
+    out = out.loc[mask_mat & mask_avail].reset_index(drop=True)
     return out
 
 
@@ -632,7 +653,7 @@ def apply_sticker_replacement_orders(
 def read_sticker_order_excel(source) -> pd.DataFrame:
     if hasattr(source, "seek"):
         source.seek(0)
-    raw = pd.read_excel(source, sheet_name=0, header=0)
+    raw = pd.read_excel(source, sheet_name=0, header=0, engine="openpyxl")
     raw = clean_headers(raw)
     if raw.empty:
         raise ValueError("File Excel kosong.")
@@ -753,12 +774,12 @@ def read_drp_sheet(source) -> pd.DataFrame | None:
     try:
         if hasattr(source, "seek"):
             source.seek(0)
-        excel_file = pd.ExcelFile(source)
+        excel_file = pd.ExcelFile(source, engine="openpyxl")
         if DRP_SHEET_NAME not in excel_file.sheet_names:
             return None
         if hasattr(source, "seek"):
             source.seek(0)
-        raw_drp = pd.read_excel(source, sheet_name=DRP_SHEET_NAME, header=0)
+        raw_drp = pd.read_excel(source, sheet_name=DRP_SHEET_NAME, header=0, engine="openpyxl")
         return normalize_data(raw_drp)
     except Exception:
         return None
@@ -771,7 +792,7 @@ def read_workbook(source) -> pd.DataFrame:
         try:
             if hasattr(source, "seek"):
                 source.seek(0)
-            result = normalize_data(pd.read_excel(source, sheet_name=sheet, header=header))
+            result = normalize_data(pd.read_excel(source, sheet_name=sheet, header=header, engine="openpyxl"))
             has_identity = result["ID Outlet"].notna() | result["Nama Customer"].notna()
             if not result.empty and has_identity.any():
                 base_df = result.loc[has_identity.to_numpy(dtype=bool)].reset_index(drop=True)
@@ -794,7 +815,7 @@ def read_workbook(source) -> pd.DataFrame:
 def read_branding_workbook(source) -> pd.DataFrame:
     if hasattr(source, "seek"):
         source.seek(0)
-    frame = pd.read_excel(source, sheet_name="COSPKR06", header=11)
+    frame = pd.read_excel(source, sheet_name="COSPKR06", header=11, engine="openpyxl")
     frame = frame.iloc[1:].copy()
     columns = list(frame.columns)
     required = [
@@ -838,7 +859,7 @@ def read_branding_workbook(source) -> pd.DataFrame:
 def read_drp_crosscheck_workbook(source) -> pd.DataFrame:
     if hasattr(source, "seek"):
         source.seek(0)
-    excel_file = pd.ExcelFile(source)
+    excel_file = pd.ExcelFile(source, engine="openpyxl")
     candidate_sheets = ["CODPR03"] + [s for s in excel_file.sheet_names if s != "CODPR03"]
     parsed_df: pd.DataFrame | None = None
 
@@ -847,7 +868,7 @@ def read_drp_crosscheck_workbook(source) -> pd.DataFrame:
             try:
                 if hasattr(source, "seek"):
                     source.seek(0)
-                raw = pd.read_excel(source, sheet_name=sheet, header=hdr)
+                raw = pd.read_excel(source, sheet_name=sheet, header=hdr, engine="openpyxl")
                 raw = clean_headers(raw)
                 unnamed_cols = [c for c in raw.columns if c.startswith("Unnamed:")]
                 raw = raw.drop(columns=unnamed_cols, errors="ignore")
@@ -2136,7 +2157,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             )
 
             col_s3, col_s4, col_s5 = st.columns([1.6, 1.3, 1.4])
-            in_material = st.text_input if False else col_s3.text_input(
+            in_material = col_s3.text_input(
                 "Material",
                 value=default_material,
                 placeholder="Contoh: Vinyl Panel Toko 1 x 2 m (BL)",
