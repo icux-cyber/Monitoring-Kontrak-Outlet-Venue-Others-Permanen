@@ -616,8 +616,8 @@ def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
     priority_cols = [
         "Status Kontrak", "Sisa Hari", "ID Outlet", "Nama Customer",
         "Brand", "Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen",
-        "Ukuran Sticker Panel Toko", "Brand Panel", "Versi",
-        "Tanggal Penggantian Sticker / Vinyl Panel", "Nama Vendor",  # <-- diubah
+        "Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Brand Panel", "Versi",  # <-- diubah
+        "Tanggal Penggantian Sticker / Vinyl Panel", "Nama Vendor",
         "Zona", "Sektor", "Pos Budget", "Kategori Outlet", "Kategori Pekerjaan",
     ]
     existing_priority = [c for c in priority_cols if c in display_frame.columns]
