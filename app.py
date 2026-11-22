@@ -22,6 +22,7 @@ MATERIAL_COLUMNS = ["Panel Toko", "Showcase", "Layar Toko", "Shop Sign / Neon Bo
 SYNC_PANEL_SCREEN_COLUMNS = [
     "Ukuran Sticker Panel Toko",
     "Brand Panel",
+    "Versi",
     "Ukuran Layar",
     "Brand Layar",
 ]
@@ -35,13 +36,14 @@ STICKER_ORDER_COLUMNS = [
     "Nama Outlet",
     "Ukuran Sticker",
     "Brand Sticker",
+    "Versi",
     "Tanggal Penggantian Sticker Panel",
 ]
 COLUMNS = [
     "ID Outlet", "Nama Customer", "Alamat", "Zona", "Sektor", "Pos Budget",
     "Kategori Outlet", "Kategori Pekerjaan", "Brand", "Nominal Kontrak",
     "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen", *MATERIAL_COLUMNS,
-    "Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Brand Panel",
+    "Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Brand Panel", "Versi",
     "Tanggal Penggantian Sticker Panel",
     "Ukuran Layar", "Brand Layar",
 ]
@@ -49,7 +51,7 @@ CONTENT_COLUMNS = [
     "ID Outlet", "Nama Customer", "Alamat", "Zona", "Sektor", "Pos Budget",
     "Kategori Outlet", "Kategori Pekerjaan", "Brand", "Nominal Kontrak",
     "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen",
-    "Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Brand Panel",
+    "Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Brand Panel", "Versi",
     "Tanggal Penggantian Sticker Panel",
     "Ukuran Layar", "Brand Layar",
 ]
@@ -76,6 +78,7 @@ ALIASES = {
         "Ukuran Sticker Panel Toko",
         "Ukuran Sticker Panel",
         "Ukuran Sticker",
+        "Ukuran Sticker / Vinyl",
         "Ukuran Sticker Panel (diluar Nama Toko)",
         "Ukuran Stiker Panel Toko",
         "Size Sticker Panel Toko",
@@ -85,6 +88,12 @@ ALIASES = {
         "Brand Sticker",
         "Brand Planning - Sticker Panel",
         "Merek Panel",
+    ),
+    "Versi": (
+        "Versi",
+        "Version",
+        "Versi Sticker",
+        "Versi Panel",
     ),
     "Tanggal Penggantian Sticker Panel": (
         "Tanggal Penggantian Sticker Panel",
@@ -289,18 +298,31 @@ def parse_material(value, column: str) -> bool:
 
 
 def extract_sizes(value):
+    """
+    Mengambil hanya ukuran dimensi (contoh: 'Sticker Panel Toko 1 x 2 m' -> '1 x 2 m').
+    Jika tidak ada pola dimensi 'angka x angka m', mengembalikan teks apa adanya (jika bukan label generik).
+    """
     if pd.isna(value) or str(value).strip() == "":
         return pd.NA
     text = str(value).strip()
+    if text.casefold() in {"<na>", "nan", "none"}:
+        return pd.NA
     matches = re.findall(
-        r"(?<!\d)(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*m\b",
+        r"(?<!\d)(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*(?:m\b)?",
         text,
         flags=re.IGNORECASE,
     )
-    if not matches:
-        return text
-    sizes = dict.fromkeys(f"{width} x {height} m" for width, height in matches)
-    return ", ".join(sizes)
+    if matches:
+        sizes = dict.fromkeys(f"{width.strip()} x {height.strip()} m" for width, height in matches)
+        return ", ".join(sizes)
+    cleaned = re.sub(
+        r"\b(?:sticker|stiker|vinyl|panel\s*toko|panel|toko|materi|ukuran|size)\b",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -:/,;")
+    return cleaned if cleaned else pd.NA
 
 
 def customer_id_key(value) -> str:
@@ -377,11 +399,11 @@ def apply_sticker_replacement_orders(
     orders_df: pd.DataFrame,
 ) -> tuple[pd.DataFrame, int, int, list[str]]:
     """
-    Menerapkan pemesanan penggantian sticker panel ke data kontrak.
+    Menerapkan pemesanan penggantian sticker panel ke data kontrak (master data outlet).
     - Mencocokkan berdasarkan ID Outlet (jika diisi), atau Nama Outlet (jika ID Outlet kosong / tidak cocok).
-    - Mengupdate 'Ukuran Sticker Panel Toko', 'Brand Panel', dan 'Tanggal Penggantian Sticker Panel'.
+    - Mengambil hanya ukuran dari 'Ukuran Sticker' (misal 'Sticker Panel Toko 1 x 2 m' -> '1 x 2 m').
+    - Mengupdate 'Ukuran Sticker Panel Toko', 'Brand Panel', 'Versi' (jika diisi), dan 'Tanggal Penggantian Sticker Panel'.
     - Mengaktifkan 'Panel Toko' = True bila ukuran atau brand sticker terisi.
-    Mengembalikan: (updated_df, updated_row_count, created_row_count, unmatched_labels)
     """
     target = normalize_data(contracts).copy()
     id_keys = target["ID Outlet"].map(customer_id_key)
@@ -406,6 +428,7 @@ def apply_sticker_replacement_orders(
         raw_name = order.get("Nama Outlet", pd.NA)
         raw_size = order.get("Ukuran Sticker", pd.NA)
         raw_brand = order.get("Brand Sticker", pd.NA)
+        raw_version = order.get("Versi", pd.NA)
         raw_date = order.get("Tanggal Penggantian Sticker Panel", pd.NaT)
 
         id_str = "" if pd.isna(raw_id) else str(raw_id).strip()
@@ -417,6 +440,11 @@ def apply_sticker_replacement_orders(
         brand_val = (
             str(raw_brand).strip()
             if pd.notna(raw_brand) and str(raw_brand).strip() not in {"", "<NA>", "nan", "None"}
+            else pd.NA
+        )
+        version_val = (
+            str(raw_version).strip()
+            if pd.notna(raw_version) and str(raw_version).strip() not in {"", "<NA>", "nan", "None"}
             else pd.NA
         )
         parsed_dt = pd.to_datetime(raw_date, errors="coerce", dayfirst=True)
@@ -437,6 +465,8 @@ def apply_sticker_replacement_orders(
                     target.at[r_idx, "Ukuran Sticker Panel Toko"] = size_val
                 if pd.notna(brand_val) and str(brand_val).strip() != "":
                     target.at[r_idx, "Brand Panel"] = brand_val
+                if pd.notna(version_val) and str(version_val).strip() != "":
+                    target.at[r_idx, "Versi"] = version_val
                 if not pd.isna(date_val):
                     target.at[r_idx, "Tanggal Penggantian Sticker Panel"] = date_val
                 if (pd.notna(size_val) and str(size_val).strip() != "") or (pd.notna(brand_val) and str(brand_val).strip() != ""):
@@ -468,8 +498,16 @@ def read_sticker_order_excel(source) -> pd.DataFrame:
 
     id_col = pick("ID Outlet", "ID Customer", "Kode Outlet", "Outlet ID")
     name_col = pick("Nama Outlet", "Nama Customer", "Customer Name", "Nama Toko", "Outlet")
-    size_col = pick("Ukuran Sticker", "Ukuran Sticker Panel Toko", "Ukuran Sticker Panel", "Ukuran Stiker")
-    brand_col = pick("Brand Sticker", "Brand Panel", "Merek Sticker", "Merek Panel")
+    size_col = pick(
+        "Ukuran Sticker",
+        "Ukuran Sticker / Vinyl",
+        "Ukuran Sticker Panel Toko",
+        "Ukuran Sticker Panel",
+        "Ukuran Stiker",
+        "Material",
+    )
+    brand_col = pick("Brand Sticker", "Brand Panel", "Merek Sticker", "Merek Panel", "Brand")
+    version_col = pick("Versi", "Version", "Versi Sticker", "Versi Panel")
     date_col = pick(
         "Tanggal Penggantian Sticker Panel",
         "Tanggal Penggantian",
@@ -482,10 +520,11 @@ def read_sticker_order_excel(source) -> pd.DataFrame:
         "Nama Outlet": name_col,
         "Ukuran Sticker": size_col,
         "Brand Sticker": brand_col,
+        "Versi": version_col,
         "Tanggal Penggantian Sticker Panel": date_col,
     })
 
-    for col in ("ID Outlet", "Nama Outlet", "Ukuran Sticker", "Brand Sticker"):
+    for col in ("ID Outlet", "Nama Outlet", "Ukuran Sticker", "Brand Sticker", "Versi"):
         df[col] = df[col].astype("string").str.strip()
         df[col] = df[col].replace({"": pd.NA, "<NA>": pd.NA, "nan": pd.NA, "None": pd.NA})
 
@@ -493,7 +532,7 @@ def read_sticker_order_excel(source) -> pd.DataFrame:
         df["Tanggal Penggantian Sticker Panel"], errors="coerce", dayfirst=True
     ).dt.tz_localize(None)
 
-    has_any = df[["ID Outlet", "Nama Outlet", "Ukuran Sticker", "Brand Sticker"]].notna().any(axis=1)
+    has_any = df[["ID Outlet", "Nama Outlet", "Ukuran Sticker", "Brand Sticker", "Versi"]].notna().any(axis=1)
     df = df.loc[has_any.to_numpy(dtype=bool)].reset_index(drop=True)
 
     missing_name_mask = df["Nama Outlet"].isna()
@@ -1068,7 +1107,7 @@ def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
     priority_cols = [
         "Status Kontrak", "Sisa Hari", "ID Outlet", "Nama Customer",
         "Brand", "Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen",
-        "Ukuran Sticker Panel Toko", "Brand Panel", "Tanggal Penggantian Sticker Panel",
+        "Ukuran Sticker Panel Toko", "Brand Panel", "Versi", "Tanggal Penggantian Sticker Panel",
         "Zona", "Sektor", "Pos Budget", "Kategori Outlet", "Kategori Pekerjaan",
     ]
     existing_priority = [c for c in priority_cols if c in display_frame.columns]
@@ -1119,6 +1158,7 @@ def render_dashboard_table(title: str, frame: pd.DataFrame, download_filename: s
             "Nominal Kontrak": st.column_config.TextColumn("Nominal Kontrak", width="medium"),
             "Ukuran Sticker Panel Toko": st.column_config.TextColumn("Ukuran Sticker Panel", width="medium"),
             "Brand Panel": st.column_config.TextColumn("Brand Sticker", width="medium"),
+            "Versi": st.column_config.TextColumn("Versi", width="small"),
             "Tanggal Penggantian Sticker Panel": st.column_config.TextColumn("Tgl Ganti Sticker Terakhir", width="medium"),
         },
     )
@@ -1182,11 +1222,12 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool,
             for index, column in enumerate(MATERIAL_COLUMNS)
         }
 
-        p1, p2, p3, p4 = st.columns(4)
+        p1, p2, p3, p4, p5 = st.columns(5)
         panel_size = p1.text_input("Ukuran Panel Toko", value=safe_text(current["Ukuran Panel Toko"]), placeholder="1 x 3 m", key=f"panel_size_{suffix}")
         sticker_size = p2.text_input("Ukuran Sticker Panel", value=safe_text(current["Ukuran Sticker Panel Toko"]), placeholder="1 x 2 m", key=f"sticker_size_{suffix}")
         panel_brand = p3.text_input("Brand Panel", value=safe_text(current["Brand Panel"]), key=f"panel_brand_{suffix}")
-        sticker_replace_date = p4.date_input(
+        sticker_version = p4.text_input("Versi (Opsional)", value=safe_text(current.get("Versi", pd.NA)), placeholder="V1 / V2", key=f"sticker_version_{suffix}")
+        sticker_replace_date = p5.date_input(
             "Tgl Ganti Sticker Terakhir",
             value=safe_date(current.get("Tanggal Penggantian Sticker Panel", pd.NaT)),
             key=f"sticker_replace_date_{suffix}",
@@ -1215,8 +1256,9 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool,
         "No. Dokumen": doc_no.strip() or pd.NA,
         **material_values,
         "Ukuran Panel Toko": panel_size.strip() or pd.NA,
-        "Ukuran Sticker Panel Toko": sticker_size.strip() or pd.NA,
+        "Ukuran Sticker Panel Toko": extract_sizes(sticker_size) if sticker_size.strip() else pd.NA,
         "Brand Panel": panel_brand.strip() or pd.NA,
+        "Versi": sticker_version.strip() or pd.NA,
         "Tanggal Penggantian Sticker Panel": pd.Timestamp(sticker_replace_date) if sticker_replace_date else pd.NaT,
         "Ukuran Layar": screen_size.strip() or pd.NA,
         "Brand Layar": screen_brand.strip() or pd.NA,
@@ -1408,6 +1450,7 @@ if active_menu == "📊 Dashboard & Monitoring":
             | view["No. Dokumen"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
             | view["Brand"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
             | view["Brand Panel"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
+            | view["Versi"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
         )
         view = view[mask]
 
@@ -1554,6 +1597,7 @@ elif active_menu == "👥 Kelola Data Customer":
                             "Periode Kontrak Awal",
                             "Periode Kontrak Akhir",
                             "Tanggal Penggantian Sticker Panel",
+                            "Versi",
                             "No. Dokumen",
                             "Zona",
                             "Sektor",
@@ -1787,6 +1831,7 @@ elif active_menu == "👥 Kelola Data Customer":
                 "Ukuran Panel Toko": "1 x 3 m",
                 "Ukuran Sticker Panel Toko": "1 x 2 m",
                 "Brand Panel": "Djarum Super",
+                "Versi": "V1",
                 "Tanggal Penggantian Sticker Panel": pd.Timestamp(date.today()),
                 "Ukuran Layar": pd.NA,
                 "Brand Layar": pd.NA,
@@ -1869,7 +1914,8 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
     st.markdown("### 🏷️ Pemesanan Penggantian Sticker Panel")
     st.caption(
         "Catat pemesanan penggantian sticker panel secara satuan maupun massal (Excel). "
-        "Saat disimpan, **Ukuran Sticker**, **Brand Sticker**, dan **Tanggal Penggantian** otomatis terupdate ke **Semua Data Customer Terfilter**."
+        "Ukuran sticker/vinyl hanya akan dibaca dimensinya saja (contoh: `Sticker Panel Toko 1 x 2 m` → `1 x 2 m`), "
+        "lalu **Ukuran Sticker**, **Brand Sticker**, **Versi** (opsional), dan **Tanggal Penggantian** langsung terupdate ke **Semua Data Customer Terfilter**."
     )
 
     tab_sticker_single, tab_sticker_batch = st.tabs([
@@ -1892,10 +1938,10 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                 key="sticker_order_name",
             )
 
-            col_s3, col_s4, col_s5 = st.columns([1.3, 1.5, 1.2])
+            col_s3, col_s4, col_s5, col_s6 = st.columns([1.4, 1.3, 1.0, 1.2])
             in_ukuran_sticker = col_s3.text_input(
-                "Ukuran Sticker",
-                placeholder="Contoh: 1 x 2 m",
+                "Ukuran Sticker / Vinyl",
+                placeholder="Contoh: Sticker Panel Toko 1 x 2 m atau 1 x 2 m",
                 key="sticker_order_size",
             )
             in_brand_sticker = col_s4.text_input(
@@ -1903,7 +1949,12 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                 placeholder="Contoh: Djarum Super / 76 Aksara",
                 key="sticker_order_brand",
             )
-            in_tgl_ganti = col_s5.date_input(
+            in_versi_sticker = col_s5.text_input(
+                "Versi (Opsional)",
+                placeholder="Contoh: V1 / V2",
+                key="sticker_order_version",
+            )
+            in_tgl_ganti = col_s6.date_input(
                 "Tanggal Penggantian",
                 value=date.today(),
                 key="sticker_order_date",
@@ -1925,6 +1976,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                     "Nama Outlet": in_nama_outlet.strip(),
                     "Ukuran Sticker": in_ukuran_sticker.strip() or pd.NA,
                     "Brand Sticker": in_brand_sticker.strip() or pd.NA,
+                    "Versi": in_versi_sticker.strip() or pd.NA,
                     "Tanggal Penggantian Sticker Panel": pd.Timestamp(in_tgl_ganti) if in_tgl_ganti else pd.Timestamp(date.today()),
                 }])
                 try:
@@ -1940,9 +1992,10 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                         save_data(updated_df)
                         st.session_state.contracts = updated_df
                         st.session_state.load_warning = None
+                        parsed_sz = extract_sizes(in_ukuran_sticker) if in_ukuran_sticker.strip() else "-"
                         st.success(
-                            f"✅ Berhasil mengupdate **{upd_cnt}** data customer untuk **{in_nama_outlet.strip()}**! "
-                            f"Ukuran Sticker, Brand Sticker, dan Tanggal Penggantian sudah tersimpan ke **Semua Data Customer Terfilter**."
+                            f"✅ Berhasil mengupdate **{upd_cnt}** data customer untuk **{in_nama_outlet.strip()}** "
+                            f"(Ukuran terbaca: `{parsed_sz}`). Data sudah terupdate di **Semua Data Customer Terfilter**."
                         )
                         st.rerun()
                 except Exception as error:
@@ -1953,6 +2006,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             contracts["Tanggal Penggantian Sticker Panel"].notna()
             | contracts["Ukuran Sticker Panel Toko"].notna()
             | contracts["Brand Panel"].notna()
+            | contracts["Versi"].notna()
         ].copy()
         if sticker_history.empty:
             st.info("Belum ada data penggantian sticker panel yang tercatat.")
@@ -1966,6 +2020,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                 "Zona",
                 "Ukuran Sticker Panel Toko",
                 "Brand Panel",
+                "Versi",
                 "Tanggal Penggantian Sticker Panel",
             ]
             hist_disp = sticker_history[hist_cols].copy()
@@ -1981,6 +2036,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                     "Nama Customer": st.column_config.TextColumn("Nama Outlet", width="large"),
                     "Ukuran Sticker Panel Toko": st.column_config.TextColumn("Ukuran Sticker", width="medium"),
                     "Brand Panel": st.column_config.TextColumn("Brand Sticker", width="medium"),
+                    "Versi": st.column_config.TextColumn("Versi", width="small"),
                     "Tanggal Penggantian Sticker Panel": st.column_config.TextColumn("Tgl Penggantian Terakhir", width="medium"),
                 },
             )
@@ -1991,15 +2047,17 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             {
                 "ID Outlet": "501X0001",
                 "Nama Outlet": "TOKO CONTOH 1",
-                "Ukuran Sticker": "1 x 2 m",
+                "Ukuran Sticker": "Sticker Panel Toko 1 x 2 m",
                 "Brand Sticker": "Djarum Super",
+                "Versi": "V1",
                 "Tanggal Penggantian Sticker Panel": pd.Timestamp(date.today()),
             },
             {
                 "ID Outlet": "",
                 "Nama Outlet": "TOKO CONTOH 2 (TANPA ID OUTLET)",
-                "Ukuran Sticker": "0.5 x 1.5 m",
+                "Ukuran Sticker": "1 x 2 m",
                 "Brand Sticker": "76 Aksara",
+                "Versi": "",
                 "Tanggal Penggantian Sticker Panel": pd.Timestamp(date.today()),
             },
         ])[STICKER_ORDER_COLUMNS]
@@ -2433,6 +2491,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                                     "Ukuran Panel Toko": pd.NA,
                                     "Ukuran Sticker Panel Toko": pd.NA,
                                     "Brand Panel": pd.NA,
+                                    "Versi": pd.NA,
                                     "Tanggal Penggantian Sticker Panel": pd.NaT,
                                     "Ukuran Layar": pd.NA,
                                     "Brand Layar": pd.NA,
@@ -2458,7 +2517,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                                     st.rerun()
 
     with tab_panel_sync:
-        st.caption("Mencocokkan ukuran sticker panel, brand panel, dan ukuran layar dari sheet DRP berdasarkan ID Customer.")
+        st.caption("Mencocokkan ukuran sticker panel, brand panel, versi, dan ukuran layar dari sheet DRP berdasarkan ID Customer.")
         sync_upload = st.file_uploader("Upload File Sumber Panel & Layar (.xlsx)", type=["xlsx"], key="sync_panel_screen_upload")
         overwrite_sync = st.checkbox("Timpa nilai yang sudah terisi jika ID Customer cocok", value=False, key="overwrite_panel_screen_sync")
         if st.button("🔗 Hubungkan & Sinkronkan", type="primary", key="btn_sync_panel_screen"):
