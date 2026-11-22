@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -89,6 +90,10 @@ CONTENT_COLUMNS = [
     "Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Brand Panel", "Versi",
     "Tanggal Penggantian Sticker Panel", "Nama Vendor",
     "Ukuran Layar", "Brand Layar",
+]
+SEARCH_SOURCE_COLUMNS = [
+    "ID Outlet", "Nama Customer", "Alamat", "No. Dokumen",
+    "Brand", "Brand Panel", "Versi", "Nama Vendor", "Sektor",
 ]
 ALIASES = {
     "ID Outlet": ("ID Outlet", "ID Customer", "Customer ID", "Kode Outlet", "Outlet ID"),
@@ -281,6 +286,50 @@ def reset_multi_edit_state() -> None:
     st.session_state["multi_select_all_state"] = False
     st.session_state["confirm_delete_multi_cb"] = False
     st.session_state.pop("multi_customer_data_editor", None)
+
+
+# ==========================================
+# HELPER CACHE & STATE MANAGEMENT
+# ==========================================
+def _dataframe_fingerprint(df: pd.DataFrame | None) -> str:
+    if df is None or df.empty:
+        return "empty"
+    h = hashlib.blake2b(digest_size=12)
+    h.update(str(df.shape).encode("utf-8"))
+    for col in df.columns:
+        if col == "_search_blob":
+            continue
+        h.update(str(col).encode("utf-8"))
+        try:
+            vals = df[col].astype(str).tolist()
+            h.update("|".join(vals).encode("utf-8", errors="ignore"))
+        except Exception:
+            pass
+    return h.hexdigest()
+
+
+def _attach_search_blob(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    parts: list[pd.Series] = []
+    for col in SEARCH_SOURCE_COLUMNS:
+        if col in out.columns:
+            parts.append(out[col].fillna("").astype(str).str.casefold())
+    if parts:
+        combined = parts[0]
+        for s in parts[1:]:
+            combined = combined + " " + s
+        out["_search_blob"] = combined
+    else:
+        out["_search_blob"] = ""
+    return out
+
+
+def set_contracts_state(df: pd.DataFrame) -> pd.DataFrame:
+    normalized = _attach_search_blob(normalize_data(df))
+    st.session_state.contracts = normalized
+    st.session_state.pop("_master_lookup_cache", None)
+    st.session_state.pop("sticker_order_png_bytes", None)
+    return normalized
 
 
 # ==========================================
@@ -709,29 +758,30 @@ def _load_initial_promo_stock_impl() -> pd.DataFrame:
     )
 
 
-@st.cache_data(show_spinner=False)
-def _build_warehouse_stock_options(stock_json: str) -> tuple[list[str], dict[str, dict]]:
+def get_warehouse_stock_options(promo_df: pd.DataFrame) -> tuple[list[str], dict[str, dict]]:
     default_label = "— Pilih dari List Materi Promosi Gudang (Available) —"
+    if promo_df is None or promo_df.empty:
+        return [default_label], {}
+
+    fp = _dataframe_fingerprint(promo_df)
+    cache = st.session_state.get("_warehouse_stock_cache")
+    if isinstance(cache, tuple) and len(cache) == 3 and cache[0] == fp:
+        return cache[1], cache[2]
+
     labels: list[str] = [default_label]
     records: dict[str, dict] = {}
-    if not stock_json:
-        return labels, records
 
-    df = pd.read_json(io.StringIO(stock_json))
-    if df.empty:
-        return labels, records
-
-    mat_list = df["Material"].fillna("").astype(str).tolist() if "Material" in df else [""] * len(df)
-    brd_list = df["Brand"].fillna("").astype(str).tolist() if "Brand" in df else [""] * len(df)
-    ver_list = df["Version"].fillna("").astype(str).tolist() if "Version" in df else [""] * len(df)
+    mat_list = promo_df["Material"].fillna("").astype(str).tolist() if "Material" in promo_df else [""] * len(promo_df)
+    brd_list = promo_df["Brand"].fillna("").astype(str).tolist() if "Brand" in promo_df else [""] * len(promo_df)
+    ver_list = promo_df["Version"].fillna("").astype(str).tolist() if "Version" in promo_df else [""] * len(promo_df)
     avail_list = (
-        pd.to_numeric(df["Available"], errors="coerce").fillna(0).astype(int).tolist()
-        if "Available" in df
-        else [0] * len(df)
+        pd.to_numeric(promo_df["Available"], errors="coerce").fillna(0).astype(int).tolist()
+        if "Available" in promo_df
+        else [0] * len(promo_df)
     )
-    uom_list = df["UOM"].fillna("").astype(str).tolist() if "UOM" in df else [""] * len(df)
+    uom_list = promo_df["UOM"].fillna("").astype(str).tolist() if "UOM" in promo_df else [""] * len(promo_df)
 
-    for idx in range(len(df)):
+    for idx in range(len(promo_df)):
         m_s = mat_list[idx].strip()
         b_s = brd_list[idx].strip()
         v_s = ver_list[idx].strip()
@@ -746,41 +796,41 @@ def _build_warehouse_stock_options(stock_json: str) -> tuple[list[str], dict[str
             "Available": a_i,
             "UOM": u_s,
         }
+
+    st.session_state["_warehouse_stock_cache"] = (fp, labels, records)
     return labels, records
 
 
-def get_warehouse_stock_options(promo_df: pd.DataFrame) -> tuple[list[str], dict[str, dict]]:
-    if promo_df is None or promo_df.empty:
-        return _build_warehouse_stock_options("")
-    keep_cols = [c for c in ["Material", "Brand", "Version", "Available", "UOM"] if c in promo_df.columns]
-    s_json = promo_df[keep_cols].to_json(orient="records", force_ascii=False)
-    return _build_warehouse_stock_options(s_json)
-
-
-@st.cache_data(show_spinner=False)
-def _build_master_lookup_maps(
-    contracts_json: str,
+def get_master_lookup_maps(
+    master_df: pd.DataFrame,
 ) -> tuple[dict[str, list[int]], dict[str, list[int]], dict[int, str]]:
-    if not contracts_json:
+    if master_df is None or master_df.empty:
         return {}, {}, {}
-    df = pd.read_json(io.StringIO(contracts_json))
-    if df.empty:
-        return {}, {}, {}
+
+    fp = _dataframe_fingerprint(master_df)
+    cached = st.session_state.get("_master_lookup_cache")
+    if isinstance(cached, tuple) and len(cached) == 4 and cached[0] == fp:
+        return cached[1], cached[2], cached[3]
 
     id_map: dict[str, list[int]] = {}
     name_map: dict[str, list[int]] = {}
     addr_map: dict[int, str] = {}
 
-    for idx, row in df.iterrows():
-        r_idx = int(idx)
-        k_id = customer_id_key(row.get("ID Outlet"))
-        k_name = normalize_name_key(row.get("Nama Customer"))
-        addr_map[r_idx] = safe_text(row.get("Alamat"))
-        if k_id:
-            id_map.setdefault(k_id, []).append(r_idx)
-        if k_name:
-            name_map.setdefault(k_name, []).append(r_idx)
+    ids = master_df["ID Outlet"].tolist() if "ID Outlet" in master_df.columns else [pd.NA] * len(master_df)
+    names = master_df["Nama Customer"].tolist() if "Nama Customer" in master_df.columns else [pd.NA] * len(master_df)
+    addrs = master_df["Alamat"].tolist() if "Alamat" in master_df.columns else [pd.NA] * len(master_df)
 
+    for pos, r_idx in enumerate(master_df.index):
+        idx_int = int(r_idx)
+        k_id = customer_id_key(ids[pos])
+        k_name = normalize_name_key(names[pos])
+        addr_map[idx_int] = safe_text(addrs[pos])
+        if k_id:
+            id_map.setdefault(k_id, []).append(idx_int)
+        if k_name:
+            name_map.setdefault(k_name, []).append(idx_int)
+
+    st.session_state["_master_lookup_cache"] = (fp, id_map, name_map, addr_map)
     return id_map, name_map, addr_map
 
 
@@ -791,9 +841,7 @@ def lookup_master_indices(
 ) -> list[int]:
     if master_df is None or master_df.empty:
         return []
-    keep_cols = [c for c in ["ID Outlet", "Nama Customer", "Alamat"] if c in master_df.columns]
-    c_json = master_df[keep_cols].to_json(orient="records", force_ascii=False)
-    id_map, name_map, _ = _build_master_lookup_maps(c_json)
+    id_map, name_map, _ = get_master_lookup_maps(master_df)
 
     k_id = customer_id_key(id_outlet_val)
     k_name = normalize_name_key(nama_outlet_val)
@@ -819,9 +867,7 @@ def lookup_master_address_fast(
     matched = lookup_master_indices(master_df, id_outlet_val, nama_outlet_val)
     if not matched:
         return False, ""
-    keep_cols = [c for c in ["ID Outlet", "Nama Customer", "Alamat"] if c in master_df.columns]
-    c_json = master_df[keep_cols].to_json(orient="records", force_ascii=False)
-    _, _, addr_map = _build_master_lookup_maps(c_json)
+    _, _, addr_map = get_master_lookup_maps(master_df)
     return True, addr_map.get(matched[0], "")
 
 
@@ -886,9 +932,7 @@ def apply_sticker_replacement_orders(
     matched_records: list[dict] = []
     unmatched_labels: list[str] = []
 
-    keep_cols = [c for c in ["ID Outlet", "Nama Customer", "Alamat"] if c in target.columns]
-    c_json = target[keep_cols].to_json(orient="records", force_ascii=False)
-    id_map, name_map, _ = _build_master_lookup_maps(c_json)
+    id_map, name_map, _ = get_master_lookup_maps(target)
 
     for _, order in orders_df.iterrows():
         raw_id = order.get("ID Outlet", pd.NA)
@@ -976,7 +1020,7 @@ def apply_sticker_replacement_orders(
             + "\n• ".join(unmatched_labels)
         )
 
-    return normalize_data(target), len(updated_rows_set), matched_records, unmatched_labels
+    return _attach_search_blob(normalize_data(target)), len(updated_rows_set), matched_records, unmatched_labels
 
 
 def read_sticker_order_excel(source) -> pd.DataFrame:
@@ -1092,26 +1136,22 @@ def _wrap_line_pure(text: str, width: int) -> list[str]:
 
 
 @st.cache_data(show_spinner=False)
-def _generate_sticker_order_png_cached(records_json: str, tanggal_order: str, nama_vendor: str) -> bytes:
-    disp = pd.DataFrame(json.loads(records_json)) if records_json else pd.DataFrame()
+def _generate_sticker_order_png_cached(payload_json: str, tanggal_order: str, nama_vendor: str) -> bytes:
+    disp = pd.DataFrame(json.loads(payload_json)) if payload_json else pd.DataFrame()
     return _generate_sticker_order_png_impl(disp, tanggal_order, nama_vendor)
 
 
 def generate_sticker_order_png(df_table: pd.DataFrame, tanggal_order: str, nama_vendor: str) -> bytes:
-    payload = df_table.drop(
-        columns=["ID Outlet", "Material", "Waktu Input", "Alamat", "Zona", "Status Kirim Pejabat"],
+    disp = df_table.drop(
+        columns=["ID Outlet", "Material", "Waktu Input", "Alamat", "Zona", "Status Kirim Pejabat", "_search_blob"],
         errors="ignore",
-    ).head(100).to_json(
-        orient="records", date_format="iso", force_ascii=False
-    )
-    return _generate_sticker_order_png_cached(payload, tanggal_order, nama_vendor)
+    ).head(100)
+    payload_json = disp.to_json(orient="records", date_format="iso", force_ascii=False)
+    return _generate_sticker_order_png_cached(payload_json, tanggal_order, nama_vendor)
 
 
 def _generate_sticker_order_png_impl(df_table: pd.DataFrame, tanggal_order: str, nama_vendor: str) -> bytes:
-    disp = df_table.drop(
-        columns=["ID Outlet", "Material", "Waktu Input", "Alamat", "Zona", "Status Kirim Pejabat"],
-        errors="ignore",
-    ).copy()
+    disp = df_table.copy()
     if disp.empty:
         disp = pd.DataFrame(
             columns=[
@@ -1281,7 +1321,7 @@ def merge_panel_screen_by_id(
         if row_changed:
             updated_rows += 1
 
-    return normalize_data(target), updated_rows, sorted(set(unmatched_ids))
+    return _attach_search_blob(normalize_data(target)), updated_rows, sorted(set(unmatched_ids))
 
 
 def read_drp_sheet(source) -> pd.DataFrame | None:
@@ -1299,14 +1339,15 @@ def read_drp_sheet(source) -> pd.DataFrame | None:
         return None
 
 
-def read_workbook(source) -> pd.DataFrame:
+@st.cache_data(show_spinner=False)
+def _read_workbook_from_bytes(file_bytes: bytes) -> pd.DataFrame:
+    bio = io.BytesIO(file_bytes)
     last_error = None
     base_df: pd.DataFrame | None = None
     for sheet, header in (("COSPKR06", 3), (SHEET_NAME, 0), (0, 0)):
         try:
-            if hasattr(source, "seek"):
-                source.seek(0)
-            result = normalize_data(pd.read_excel(source, sheet_name=sheet, header=header, engine="openpyxl"))
+            bio.seek(0)
+            result = normalize_data(pd.read_excel(bio, sheet_name=sheet, header=header, engine="openpyxl"))
             has_identity = result["ID Outlet"].notna() | result["Nama Customer"].notna()
             if not result.empty and has_identity.any():
                 base_df = result.loc[has_identity.to_numpy(dtype=bool)].reset_index(drop=True)
@@ -1319,11 +1360,25 @@ def read_workbook(source) -> pd.DataFrame:
         detail = f" ({last_error})" if last_error else ""
         raise ValueError(f"Tidak dapat membaca sheet/kolom data kontrak{detail}. Periksa file Excel dan nama sheet-nya.")
 
-    drp_df = read_drp_sheet(source)
+    bio.seek(0)
+    drp_df = read_drp_sheet(bio)
     if drp_df is not None and not drp_df.empty:
         base_df, _, _ = merge_panel_screen_by_id(base_df, drp_df, overwrite_existing=False)
 
-    return base_df
+    return _attach_search_blob(base_df)
+
+
+def read_workbook(source) -> pd.DataFrame:
+    if isinstance(source, (str, Path)):
+        p = Path(source)
+        return _read_workbook_from_bytes(p.read_bytes())
+    if hasattr(source, "getvalue"):
+        return _read_workbook_from_bytes(bytes(source.getvalue()))
+    if hasattr(source, "read"):
+        if hasattr(source, "seek"):
+            source.seek(0)
+        return _read_workbook_from_bytes(bytes(source.read()))
+    raise ValueError("Sumber workbook tidak dikenali.")
 
 
 def read_branding_workbook(source) -> pd.DataFrame:
@@ -1483,13 +1538,13 @@ def build_drp_crosscheck_report(
     drp_df: pd.DataFrame,
     compare_fields: list[str],
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    dash_all = normalize_data(contracts)
+    dash_all = contracts.reset_index(drop=True)
     dash = dash_all[dash_all["Kategori Pekerjaan"].map(_is_drp_job_category)].copy()
     dash_keys = dash["ID Outlet"].map(customer_id_key)
     key_to_dash_idx: dict[str, int] = {}
     for idx, k in dash_keys.items():
         if k and k not in key_to_dash_idx:
-            key_to_dash_idx[k] = idx
+            key_to_dash_idx[k] = int(idx)
 
     mismatch_rows = []
     matched_ok_rows = []
@@ -1561,7 +1616,7 @@ def build_dashboard_only_report(
     contracts: pd.DataFrame,
     drp_df: pd.DataFrame,
 ) -> pd.DataFrame:
-    dash_all = normalize_data(contracts).reset_index(drop=True)
+    dash_all = contracts.reset_index(drop=True)
     drp_keys = {
         customer_id_key(val)
         for val in drp_df.get("ID Customer", pd.Series(dtype="object")).dropna()
@@ -1649,16 +1704,19 @@ def apply_branding_updates(contracts: pd.DataFrame, branding: pd.DataFrame) -> t
         columns=["_id_key", "_source_order"], errors="ignore"
     )
     duplicate_details = duplicates.drop(columns=["_id_key", "_source_order"], errors="ignore")
-    return normalize_data(updated), unmatched, duplicate_details, len(matched_keys)
+    return _attach_search_blob(normalize_data(updated)), unmatched, duplicate_details, len(matched_keys)
 
 
 def load_initial_data() -> tuple[pd.DataFrame, str | None]:
     if not DATA_FILE.exists():
-        return pd.DataFrame(columns=COLUMNS), None
+        return _attach_search_blob(pd.DataFrame(columns=COLUMNS)), None
     try:
-        return read_workbook(DATA_FILE), None
+        return _attach_search_blob(read_workbook(DATA_FILE)), None
     except Exception as error:
-        return pd.DataFrame(columns=COLUMNS), f"File data awal tidak dapat dibaca ({error}). Unggah workbook Excel yang valid untuk memulai."
+        return (
+            _attach_search_blob(pd.DataFrame(columns=COLUMNS)),
+            f"File data awal tidak dapat dibaca ({error}). Unggah workbook Excel yang valid untuk memulai.",
+        )
 
 
 def validate_data(frame: pd.DataFrame) -> list[str]:
@@ -1680,29 +1738,31 @@ def validate_data(frame: pd.DataFrame) -> list[str]:
     return errors
 
 
-def add_contract_status(frame: pd.DataFrame, today: date | None = None) -> pd.DataFrame:
-    result = normalize_data(frame)
-    remaining = (result["Periode Kontrak Akhir"] - pd.Timestamp(today or date.today()).normalize()).dt.days
+def compute_contract_status(frame: pd.DataFrame, today: date | None = None) -> pd.DataFrame:
+    result = frame.copy()
+    end_dates = pd.to_datetime(result["Periode Kontrak Akhir"], errors="coerce")
+    ref_day = pd.Timestamp(today or date.today()).normalize()
+    remaining = (end_dates - ref_day).dt.days
     result["Sisa Hari"] = remaining
 
-    def status(days):
-        if pd.isna(days):
-            return "⚪ Data belum lengkap"
-        if days < 0:
-            return "🔴 Expired"
-        if days <= 30:
-            return "🟠 Kritis (≤ 30 hari)"
-        if days <= 90:
-            return "🟡 Warning (31–90 hari)"
-        return "🟢 Aktif (> 90 hari)"
-
-    result["Status Kontrak"] = remaining.map(status)
+    status_series = pd.Series("⚪ Data belum lengkap", index=result.index, dtype="object")
+    status_series = status_series.mask(remaining < 0, "🔴 Expired")
+    status_series = status_series.mask((remaining >= 0) & (remaining <= 30), "🟠 Kritis (≤ 30 hari)")
+    status_series = status_series.mask((remaining > 30) & (remaining <= 90), "🟡 Warning (31–90 hari)")
+    status_series = status_series.mask(remaining > 90, "🟢 Aktif (> 90 hari)")
+    result["Status Kontrak"] = status_series
     return result
 
 
-def excel_bytes(frame: pd.DataFrame, sheet_name: str = SHEET_NAME) -> bytes:
+def add_contract_status(frame: pd.DataFrame, today: date | None = None) -> pd.DataFrame:
+    return compute_contract_status(normalize_data(frame), today=today)
+
+
+@st.cache_data(show_spinner=False)
+def _excel_bytes_cached(records_json: str, sheet_name: str, columns_tuple: tuple[str, ...]) -> bytes:
+    df = pd.DataFrame(json.loads(records_json)) if records_json else pd.DataFrame(columns=list(columns_tuple))
     output = BytesIO()
-    export = frame.copy()
+    export = df.drop(columns=["_search_blob", "Status Kontrak", "Sisa Hari"], errors="ignore").copy()
     for column in MATERIAL_COLUMNS:
         if column in export:
             export[column] = export[column].map(lambda checked: "✓" if parse_tickmark(checked) else "")
@@ -1712,6 +1772,13 @@ def excel_bytes(frame: pd.DataFrame, sheet_name: str = SHEET_NAME) -> bytes:
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         export.to_excel(writer, sheet_name=sheet_name, index=False)
     return output.getvalue()
+
+
+def excel_bytes(frame: pd.DataFrame, sheet_name: str = SHEET_NAME) -> bytes:
+    clean_df = frame.drop(columns=["_search_blob"], errors="ignore")
+    cols_tuple = tuple(str(c) for c in clean_df.columns)
+    records_json = clean_df.to_json(orient="records", date_format="iso", force_ascii=False)
+    return _excel_bytes_cached(records_json, sheet_name, cols_tuple)
 
 
 def _get_secret_str(*keys: str, default: str = "") -> str:
@@ -1863,7 +1930,6 @@ def sync_all_cloud_targets(
     contracts_df: pd.DataFrame,
     sticker_order_log: list[dict],
 ) -> tuple[list[str], list[str]]:
-    """Menyimpan data kontrak & log pemesanan ke Google Sheet dan Supabase."""
     successes: list[str] = []
     warnings_list: list[str] = []
 
@@ -1901,7 +1967,7 @@ def sync_all_cloud_targets(
 
 
 def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
-    display_frame = frame.copy()
+    display_frame = frame.drop(columns=["_search_blob"], errors="ignore").copy()
     if "Nominal Kontrak" in display_frame:
         display_frame["Nominal Kontrak"] = display_frame["Nominal Kontrak"].map(
             lambda value: "" if pd.isna(value) else f"Rp {float(value):,.0f}".replace(",", ".")
@@ -1940,10 +2006,11 @@ def render_dashboard_table(title: str, frame: pd.DataFrame, download_filename: s
     col_head, col_dl = st.columns([3, 1])
     with col_head:
         st.markdown(f"#### {title} ({len(frame):,} outlet)".replace(",", "."))
+    sorted_frame = frame.sort_values("Sisa Hari", na_position="last")
     with col_dl:
         st.download_button(
             "📥 Export Excel",
-            data=excel_bytes(frame.sort_values("Sisa Hari", na_position="last")),
+            data=excel_bytes(sorted_frame),
             file_name=download_filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key=dl_key,
@@ -1954,7 +2021,6 @@ def render_dashboard_table(title: str, frame: pd.DataFrame, download_filename: s
         st.info(f"Tidak ada data customer pada kategori **{title}** yang sesuai dengan filter saat ini.")
         return
 
-    sorted_frame = frame.sort_values("Sisa Hari", na_position="last")
     st.dataframe(
         format_outlet_table(sorted_frame),
         width="stretch",
@@ -2080,6 +2146,8 @@ if "contracts" not in st.session_state:
     initial, warning = load_initial_data()
     st.session_state.contracts = initial
     st.session_state.load_warning = warning
+elif "_search_blob" not in st.session_state.contracts.columns:
+    st.session_state.contracts = _attach_search_blob(normalize_data(st.session_state.contracts))
 
 if "promo_stock" not in st.session_state:
     st.session_state.promo_stock = load_initial_promo_stock()
@@ -2093,13 +2161,13 @@ if "sticker_order_results" not in st.session_state:
 if "multi_select_all_state" not in st.session_state:
     st.session_state.multi_select_all_state = False
 
-contracts = add_contract_status(st.session_state.contracts)
+contracts = compute_contract_status(st.session_state.contracts)
 promo_stock_df = st.session_state.promo_stock
 expired_count = int(contracts["Status Kontrak"].eq("🔴 Expired").sum())
 critical_count = int(contracts["Status Kontrak"].eq("🟠 Kritis (≤ 30 hari)").sum())
 warning_count = int(contracts["Status Kontrak"].eq("🟡 Warning (31–90 hari)").sum())
 soon_count = critical_count + warning_count
-total_value = pd.to_numeric(contracts["Nominal Kontrak"], errors="coerce").sum()
+total_value = float(pd.to_numeric(contracts["Nominal Kontrak"], errors="coerce").sum())
 
 # SIDEBAR NAVIGASI
 with st.sidebar:
@@ -2260,17 +2328,8 @@ if active_menu == "📊 Dashboard & Monitoring":
     view = contracts.copy()
     if search_query.strip():
         q = search_query.strip().casefold()
-        mask = (
-            view["ID Outlet"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
-            | view["Nama Customer"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
-            | view["Alamat"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
-            | view["No. Dokumen"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
-            | view["Brand"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
-            | view["Brand Panel"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
-            | view["Versi"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
-            | view["Nama Vendor"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
-        )
-        view = view[mask]
+        blob = view["_search_blob"] if "_search_blob" in view.columns else view["Nama Customer"].fillna("").astype(str).str.casefold()
+        view = view[blob.str.contains(q, regex=False)]
 
     if selected_status != "Semua Status":
         view = view[view["Status Kontrak"] == selected_status]
@@ -2363,14 +2422,12 @@ elif active_menu == "👥 Kelola Data Customer":
             filtered_multi = contracts.copy()
             if multi_search.strip():
                 q_multi = multi_search.strip().casefold()
-                mask_multi = (
-                    filtered_multi["ID Outlet"].fillna("").astype(str).str.casefold().str.contains(q_multi, regex=False)
-                    | filtered_multi["Nama Customer"].fillna("").astype(str).str.casefold().str.contains(q_multi, regex=False)
-                    | filtered_multi["Alamat"].fillna("").astype(str).str.casefold().str.contains(q_multi, regex=False)
-                    | filtered_multi["Brand"].fillna("").astype(str).str.casefold().str.contains(q_multi, regex=False)
-                    | filtered_multi["Sektor"].fillna("").astype(str).str.casefold().str.contains(q_multi, regex=False)
+                blob_m = (
+                    filtered_multi["_search_blob"]
+                    if "_search_blob" in filtered_multi.columns
+                    else filtered_multi["Nama Customer"].fillna("").astype(str).str.casefold()
                 )
-                filtered_multi = filtered_multi[mask_multi]
+                filtered_multi = filtered_multi[blob_m.str.contains(q_multi, regex=False)]
 
             if multi_sel_zone != "Semua Zona":
                 filtered_multi = filtered_multi[filtered_multi["Zona"] == multi_sel_zone]
@@ -2508,8 +2565,7 @@ elif active_menu == "👥 Kelola Data Customer":
                         else:
                             try:
                                 save_data(full_updated)
-                                st.session_state.contracts = normalize_data(full_updated)
-                                _build_master_lookup_maps.clear()
+                                set_contracts_state(full_updated)
                                 st.session_state.multi_select_all_state = False
                                 st.session_state.pop("multi_customer_data_editor", None)
                                 st.success(f"✅ Berhasil memperbarui kolom **{bulk_target_col}** untuk **{len(target_indices)}** customer sekaligus!")
@@ -2533,8 +2589,7 @@ elif active_menu == "👥 Kelola Data Customer":
                     else:
                         try:
                             save_data(full_updated)
-                            st.session_state.contracts = normalize_data(full_updated)
-                            _build_master_lookup_maps.clear()
+                            set_contracts_state(full_updated)
                             st.session_state.multi_select_all_state = False
                             st.session_state.pop("multi_customer_data_editor", None)
                             st.success(f"✅ Perubahan pada {len(edited_df)} baris hasil pencarian berhasil disimpan!")
@@ -2559,8 +2614,7 @@ elif active_menu == "👥 Kelola Data Customer":
                         indices_to_drop = edited_df.index[edited_df["Pilih"] == True].tolist()
                         remaining_df = st.session_state.contracts.drop(index=indices_to_drop).reset_index(drop=True)
                         save_data(remaining_df)
-                        st.session_state.contracts = normalize_data(remaining_df)
-                        _build_master_lookup_maps.clear()
+                        set_contracts_state(remaining_df)
                         st.session_state.multi_select_all_state = False
                         st.session_state["confirm_delete_multi_cb"] = False
                         st.session_state.pop("multi_customer_data_editor", None)
@@ -2595,8 +2649,7 @@ elif active_menu == "👥 Kelola Data Customer":
                 else:
                     try:
                         save_data(updated_data)
-                        st.session_state.contracts = normalize_data(updated_data)
-                        _build_master_lookup_maps.clear()
+                        set_contracts_state(updated_data)
                         st.success("✅ Data customer berhasil diperbarui!")
                         st.rerun()
                     except Exception as error:
@@ -2608,8 +2661,7 @@ elif active_menu == "👥 Kelola Data Customer":
                     try:
                         updated_data = st.session_state.contracts.drop(index=selected_index).reset_index(drop=True)
                         save_data(updated_data)
-                        st.session_state.contracts = normalize_data(updated_data)
-                        _build_master_lookup_maps.clear()
+                        set_contracts_state(updated_data)
                         st.success("Customer berhasil dihapus.")
                         st.rerun()
                     except Exception as error:
@@ -2626,8 +2678,7 @@ elif active_menu == "👥 Kelola Data Customer":
             else:
                 try:
                     save_data(updated_data)
-                    st.session_state.contracts = normalize_data(updated_data)
-                    _build_master_lookup_maps.clear()
+                    set_contracts_state(updated_data)
                     st.success("✅ Customer baru berhasil ditambahkan!")
                     st.rerun()
                 except Exception as error:
@@ -2724,9 +2775,8 @@ elif active_menu == "👥 Kelola Data Customer":
                                 st.error("\n".join(problems))
                             else:
                                 save_data(combined)
-                                st.session_state.contracts = normalize_data(combined)
+                                set_contracts_state(combined)
                                 st.session_state.load_warning = None
-                                _build_master_lookup_maps.clear()
                                 st.success(f"✅ Berhasil menambahkan {len(rows_to_add)} customer baru!")
                                 if skipped_ids:
                                     st.info(f"Dilewati ({len(skipped_ids)} ID duplikat): {', '.join(skipped_ids[:15])}")
@@ -2926,13 +2976,11 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                             strict_master_lookup=True,
                         )
                         save_data(updated_df)
-                        st.session_state.contracts = updated_df
+                        set_contracts_state(updated_df)
                         st.session_state.load_warning = None
-                        _build_master_lookup_maps.clear()
                         st.session_state.sticker_order_results = append_sticker_order_log(
                             rec_list, st.session_state.sticker_order_results
                         )
-                        st.session_state.pop("sticker_order_png_bytes", None)
                         st.session_state["_last_autofill_alamat_key"] = ""
                         st.success(
                             f"✅ Lookup cocok dengan Master Data Dashboard: berhasil mengupdate **{upd_cnt}** baris customer "
@@ -3009,13 +3057,11 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                             strict_master_lookup=True,
                         )
                         save_data(updated_df)
-                        st.session_state.contracts = updated_df
+                        set_contracts_state(updated_df)
                         st.session_state.load_warning = None
-                        _build_master_lookup_maps.clear()
                         st.session_state.sticker_order_results = append_sticker_order_log(
                             rec_list, st.session_state.sticker_order_results
                         )
-                        st.session_state.pop("sticker_order_png_bytes", None)
                         st.session_state["_last_autofill_alamat_key"] = ""
                         st.success(
                             f"✅ Seluruh baris cocok dengan Master Data Dashboard: **{upd_cnt}** baris customer terupdate "
@@ -3189,10 +3235,8 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
             f"Berikut Kami kirimkan pemesanan penggantian Sticker / Vinyl Panel Toko ({len(target_export_df)} item):\n\n"
             "\n\n"
             "\n\n"
-            "Terima kasih.\n"
-            "\n\n"
+            "Terima kasih.\n\n"
             "Hormat kami,\n"
-            
         )
         mailto_pejabat_url = (
             f"mailto:"
@@ -3212,8 +3256,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                 try:
                     updated_contracts_now = normalize_data(st.session_state.contracts)
                     save_data(updated_contracts_now)
-                    st.session_state.contracts = updated_contracts_now
-                    _build_master_lookup_maps.clear()
+                    set_contracts_state(updated_contracts_now)
 
                     updated_log_now = update_log_status_for_rows(
                         st.session_state.sticker_order_results,
@@ -3248,8 +3291,7 @@ elif active_menu == "🏷️ Pemesanan Sticker Panel":
                 try:
                     updated_contracts_now = normalize_data(st.session_state.contracts)
                     save_data(updated_contracts_now)
-                    st.session_state.contracts = updated_contracts_now
-                    _build_master_lookup_maps.clear()
+                    set_contracts_state(updated_contracts_now)
 
                     updated_log_now = update_log_status_for_rows(
                         st.session_state.sticker_order_results,
@@ -3329,7 +3371,7 @@ elif active_menu == "📦 List Materi Promosi":
                     DATA_DIR.mkdir(parents=True, exist_ok=True)
                     parsed_stock.to_excel(PROMO_STOCK_FILE, sheet_name="PRCRG01", index=False, engine="openpyxl")
                     _cached_initial_promo_stock.clear()
-                    _build_warehouse_stock_options.clear()
+                    st.session_state.pop("_warehouse_stock_cache", None)
                     st.session_state.promo_stock = parsed_stock
                     st.success(f"✅ Berhasil memuat **{len(parsed_stock)}** item materi Sticker/Vinyl Panel Toko yang Available.")
                     st.rerun()
@@ -3416,9 +3458,8 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                             st.error("\n".join(problems))
                         else:
                             save_data(imported)
-                            st.session_state.contracts = imported
+                            set_contracts_state(imported)
                             st.session_state.load_warning = None
-                            _build_master_lookup_maps.clear()
                             st.success(f"✅ Berhasil mengimpor {len(imported)} baris data.")
                             st.rerun()
                     except Exception as error:
@@ -3454,8 +3495,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                     else:
                         if updated_count:
                             save_data(updated)
-                            st.session_state.contracts = updated
-                            _build_master_lookup_maps.clear()
+                            set_contracts_state(updated)
                         unmatched_has_id = unmatched["ID Customer"].map(customer_id_key).ne("")
                         st.session_state.branding_import_result = {
                             "duplicate_ids": int(duplicates["ID Customer"].nunique()),
@@ -3656,8 +3696,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                                     st.error("\n".join(problems))
                                 else:
                                     save_data(updated_contracts)
-                                    st.session_state.contracts = normalize_data(updated_contracts)
-                                    _build_master_lookup_maps.clear()
+                                    set_contracts_state(updated_contracts)
                                     st.success(f"✅ Berhasil meng-update {updated_counter} outlet di Dashboard sesuai data DRP!")
                                     st.rerun()
 
@@ -3794,8 +3833,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                                     st.error("\n".join(problems))
                                 else:
                                     save_data(combined_contracts)
-                                    st.session_state.contracts = normalize_data(combined_contracts)
-                                    _build_master_lookup_maps.clear()
+                                    set_contracts_state(combined_contracts)
                                     msg = f"✅ Berhasil menambahkan {len(new_records)} outlet baru ke Dashboard!"
                                     if skipped_existing:
                                         msg += f" ({skipped_existing} ID dilewati karena sudah ada)."
@@ -3880,8 +3918,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                                 current_df = normalize_data(st.session_state.contracts)
                                 remaining_df = current_df.drop(index=indices_to_drop).reset_index(drop=True)
                                 save_data(remaining_df)
-                                st.session_state.contracts = remaining_df
-                                _build_master_lookup_maps.clear()
+                                set_contracts_state(remaining_df)
                                 st.session_state["confirm_del_dash_only_rows"] = False
                                 st.success(f"✅ Berhasil menghapus {len(indices_to_drop)} baris terpilih dari Dashboard!")
                                 st.rerun()
@@ -3903,12 +3940,10 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                                 current_df = normalize_data(st.session_state.contracts)
                                 remaining_df = current_df.drop(index=indices_to_drop_all).reset_index(drop=True)
                                 save_data(remaining_df)
-                                st.session_state.contracts = remaining_df
-                                _build_master_lookup_maps.clear()
+                                set_contracts_state(remaining_df)
                                 st.session_state["confirm_del_dash_only_all"] = False
                                 st.success(f"✅ Berhasil menghapus semua ({len(indices_to_drop_all)} baris) data yang tidak ada di file upload DRP!")
                                 st.rerun()
-
 
     with tab_panel_sync:
         st.caption("Mencocokkan ukuran sticker panel, brand panel, versi, dan ukuran layar dari sheet DRP berdasarkan ID Customer.")
@@ -3931,8 +3966,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                         overwrite_existing=overwrite_sync,
                     )
                     save_data(merged_df)
-                    st.session_state.contracts = merged_df
-                    _build_master_lookup_maps.clear()
+                    set_contracts_state(merged_df)
                     st.success(f"✅ Sinkronisasi selesai: {updated_cnt} baris customer diperbarui.")
                     if missing_list:
                         st.info(f"{len(missing_list)} ID tidak ditemukan: {', '.join(missing_list[:15])}")
@@ -3982,11 +4016,10 @@ elif active_menu == "☁️ Backup & Restore":
                             st.error("\n".join(problems))
                         else:
                             save_data(restored_df)
-                            st.session_state.contracts = restored_df
+                            set_contracts_state(restored_df)
                             st.session_state.load_warning = None
                             if restored_log is not None:
                                 st.session_state.sticker_order_results = save_sticker_order_log(restored_log)
-                            _build_master_lookup_maps.clear()
                             st.success(f"✅ {len(restored_df)} baris kontrak dipulihkan.")
                             st.rerun()
                     except Exception as error:
