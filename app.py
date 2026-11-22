@@ -28,14 +28,14 @@ SYNC_PANEL_SCREEN_COLUMNS = [
 COLUMNS = [
     "ID Outlet", "Nama Customer", "Alamat", "Zona", "Sektor", "Pos Budget",
     "Kategori Outlet", "Kategori Pekerjaan", "Brand", "Nominal Kontrak",
-    "Periode Kontrak Awal", "Periode Kontrak Akhir", *MATERIAL_COLUMNS,
+    "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen", *MATERIAL_COLUMNS,
     "Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Brand Panel",
     "Ukuran Layar", "Brand Layar",
 ]
 CONTENT_COLUMNS = [
     "ID Outlet", "Nama Customer", "Alamat", "Zona", "Sektor", "Pos Budget",
     "Kategori Outlet", "Kategori Pekerjaan", "Brand", "Nominal Kontrak",
-    "Periode Kontrak Awal", "Periode Kontrak Akhir",
+    "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen",
     "Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Brand Panel",
     "Ukuran Layar", "Brand Layar",
 ]
@@ -49,9 +49,10 @@ ALIASES = {
     "Kategori Outlet": ("Kategori Outlet", "Customer Group Category", "Kategori"),
     "Kategori Pekerjaan": ("Kategori Pekerjaan", "Kategori Pekerjaan Outlet", "Work Category", "Job Category", "Kategori Kerja"),
     "Brand": ("Brand", "Finance Brand", "Merek"),
-    "Nominal Kontrak": ("Nominal Kontrak", "Nominal", "Nominal.1", "Contract Amount", "Nilai Kontrak"),
-    "Periode Kontrak Awal": ("Periode Kontrak Awal", "Periode Awal Kontrak", "Mulai", "Tanggal Mulai", "Start Date"),
-    "Periode Kontrak Akhir": ("Periode Kontrak Akhir", "Periode Akhir Kontrak", "Akhir", "Tanggal Akhir", "End Date", "Expiry Date"),
+    "Nominal Kontrak": ("Nominal Kontrak", "Nominal", "Nominal.1", "Nominal SPKS", "Contract Amount", "Nilai Kontrak"),
+    "Periode Kontrak Awal": ("Periode Kontrak Awal", "Periode Awal Kontrak", "Start Kontrak", "Mulai", "Tanggal Mulai", "Start Date"),
+    "Periode Kontrak Akhir": ("Periode Kontrak Akhir", "Periode Akhir Kontrak", "End Kontrak", "Akhir", "Tanggal Akhir", "End Date", "Expiry Date"),
+    "No. Dokumen": ("No. Dokumen", "No Dokumen", "Nomor Dokumen", "Document No", "No SPKS"),
     "Panel Toko": ("Panel Toko", "Materi Panel Toko"),
     "Showcase": ("Showcase", "Show Case", "Materi Showcase"),
     "Layar Toko": ("Layar Toko", "Layar", "Materi Layar Toko"),
@@ -224,6 +225,10 @@ def parse_amount(value):
         text = text.replace(",", ".") if len(tail) <= 2 else text.replace(",", "")
     elif text.count(".") > 1:
         text = text.replace(".", "")
+    elif "." in text:
+        tail = text.rsplit(".", 1)[-1]
+        if len(tail) == 3:
+            text = text.replace(".", "")
     try:
         return float(text)
     except ValueError:
@@ -298,7 +303,7 @@ def normalize_data(frame: pd.DataFrame) -> pd.DataFrame:
     ]
     for column in text_columns:
         normalized[column] = normalized[column].astype("string").str.strip()
-        normalized[column] = normalized[column].replace({"": pd.NA, "<NA>": pd.NA, "nan": pd.NA})
+        normalized[column] = normalized[column].replace({"": pd.NA, "<NA>": pd.NA, "nan": pd.NA, "None": pd.NA})
     for column in ("Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Ukuran Layar"):
         normalized[column] = normalized[column].map(extract_sizes)
     normalized["Nominal Kontrak"] = normalized["Nominal Kontrak"].map(parse_amount)
@@ -466,6 +471,181 @@ def read_branding_workbook(source) -> pd.DataFrame:
     return result
 
 
+def read_drp_crosscheck_workbook(source) -> pd.DataFrame:
+    """Membaca file report list DRP (misal CODPR03 (DRP).xlsx atau sheet sejenis)."""
+    if hasattr(source, "seek"):
+        source.seek(0)
+    excel_file = pd.ExcelFile(source)
+    candidate_sheets = ["CODPR03"] + [s for s in excel_file.sheet_names if s != "CODPR03"]
+    parsed_df: pd.DataFrame | None = None
+
+    for sheet in candidate_sheets:
+        for hdr in (8, 0, 3, 9, 10):
+            try:
+                if hasattr(source, "seek"):
+                    source.seek(0)
+                raw = pd.read_excel(source, sheet_name=sheet, header=hdr)
+                raw = clean_headers(raw)
+                unnamed_cols = [c for c in raw.columns if c.startswith("Unnamed:")]
+                raw = raw.drop(columns=unnamed_cols, errors="ignore")
+                lowered = {c.casefold(): c for c in raw.columns}
+                id_col = next((lowered[k] for k in ("id customer", "id outlet", "customer id") if k in lowered), None)
+                if id_col is not None:
+                    parsed_df = raw.copy()
+                    break
+            except Exception:
+                continue
+        if parsed_df is not None:
+            break
+
+    if parsed_df is None:
+        raise ValueError("Kolom 'ID Customer' atau 'ID Outlet' tidak ditemukan pada file DRP yang diunggah.")
+
+    lowered = {c.casefold(): c for c in parsed_df.columns}
+
+    def pick_col(*names):
+        for n in names:
+            if n.casefold() in lowered:
+                return parsed_df[lowered[n.casefold()]]
+        return pd.Series(pd.NA, index=parsed_df.index)
+
+    result = pd.DataFrame({
+        "ID Customer": pick_col("ID Customer", "ID Outlet", "Customer ID"),
+        "Customer": pick_col("Customer", "Nama Customer", "Nama Outlet"),
+        "Zona": pick_col("Zona", "Zone"),
+        "Kategori Outlet": pick_col("Kategori Outlet", "Customer Group Category"),
+        "Kategori DRP": pick_col("Kategori DRP", "Kategori Pekerjaan"),
+        "Brand": pick_col("Finance Brand", "Brand", "Merek"),
+        "No. Dokumen": pick_col("No. Dokumen", "No Dokumen", "Nomor Dokumen"),
+        "Periode Kontrak Awal": pick_col("Start Kontrak", "Periode Kontrak Awal", "Tanggal Pekerjaan Dari"),
+        "Periode Kontrak Akhir": pick_col("End Kontrak", "Periode Kontrak Akhir", "Tanggal Pekerjaan Sampai"),
+        "Nominal Kontrak": pick_col("Nominal SPKS", "Nominal", "Nominal Kontrak"),
+        "Status Outlet": pick_col("Status Outlet"),
+        "Status DRP": pick_col("Status DRP"),
+        "Kontrak SPKS": pick_col("Kontrak SPKS"),
+    })
+
+    for col in ("ID Customer", "Customer", "Zona", "Kategori Outlet", "Kategori DRP", "Brand", "No. Dokumen", "Status Outlet", "Status DRP", "Kontrak SPKS"):
+        result[col] = result[col].astype("string").str.strip()
+        result[col] = result[col].replace({"": pd.NA, "<NA>": pd.NA, "nan": pd.NA, "None": pd.NA})
+
+    result["Nominal Kontrak"] = result["Nominal Kontrak"].map(parse_amount)
+    for col in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
+        result[col] = pd.to_datetime(result[col], errors="coerce", dayfirst=True).dt.tz_localize(None)
+
+    result = result[result["ID Customer"].notna()].reset_index(drop=True)
+    return result
+
+
+def _fmt_val_cmp(col: str, val) -> str:
+    if pd.isna(val) or str(val).strip() == "":
+        return "-"
+    if col == "Nominal Kontrak":
+        num = parse_amount(val)
+        return "-" if pd.isna(num) else f"Rp {float(num):,.0f}".replace(",", ".")
+    if col in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
+        ts = pd.to_datetime(val, errors="coerce")
+        return "-" if pd.isna(ts) else ts.strftime("%d/%m/%Y")
+    return str(val).strip()
+
+
+def _is_field_different(col: str, dash_val, drp_val) -> bool:
+    if pd.isna(drp_val) or str(drp_val).strip() == "":
+        return False
+    if col == "Nominal Kontrak":
+        d_num = parse_amount(dash_val)
+        r_num = parse_amount(drp_val)
+        if pd.isna(d_num) and pd.isna(r_num):
+            return False
+        if pd.isna(d_num) != pd.isna(r_num):
+            return True
+        return abs(float(d_num) - float(r_num)) > 0.5
+    if col in ("Periode Kontrak Awal", "Periode Kontrak Akhir"):
+        d_ts = pd.to_datetime(dash_val, errors="coerce")
+        r_ts = pd.to_datetime(drp_val, errors="coerce")
+        if pd.isna(d_ts) and pd.isna(r_ts):
+            return False
+        if pd.isna(d_ts) != pd.isna(r_ts):
+            return True
+        return d_ts.normalize() != r_ts.normalize()
+    d_str = "" if pd.isna(dash_val) else str(dash_val).strip().casefold()
+    r_str = "" if pd.isna(drp_val) else str(drp_val).strip().casefold()
+    return d_str != r_str
+
+
+def build_drp_crosscheck_report(
+    contracts: pd.DataFrame,
+    drp_df: pd.DataFrame,
+    compare_fields: list[str],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    dash = normalize_data(contracts)
+    dash_keys = dash["ID Outlet"].map(customer_id_key)
+    key_to_dash_idx: dict[str, int] = {}
+    for idx, k in dash_keys.items():
+        if k and k not in key_to_dash_idx:
+            key_to_dash_idx[k] = idx
+
+    mismatch_rows = []
+    matched_ok_rows = []
+    missing_rows = []
+
+    for _, drp_row in drp_df.iterrows():
+        raw_id = str(drp_row["ID Customer"]).strip()
+        key = customer_id_key(raw_id)
+        if not key:
+            continue
+        if key not in key_to_dash_idx:
+            missing_rows.append(drp_row.to_dict())
+            continue
+
+        d_idx = key_to_dash_idx[key]
+        d_row = dash.loc[d_idx]
+        diff_cols = [
+            col for col in compare_fields
+            if _is_field_different(col, d_row.get(col, pd.NA), drp_row.get(col, pd.NA))
+        ]
+
+        record = {
+            "_dash_index": d_idx,
+            "ID Customer": raw_id,
+            "Nama Customer (Dashboard)": safe_text(d_row.get("Nama Customer")) or "-",
+            "Nama Customer (DRP)": safe_text(drp_row.get("Customer")) or "-",
+            "Kolom Tidak Sesuai": ", ".join(diff_cols) if diff_cols else "Sesuai",
+            "Brand (Dash)": _fmt_val_cmp("Brand", d_row.get("Brand")),
+            "Brand (DRP)": _fmt_val_cmp("Brand", drp_row.get("Brand")),
+            "Nominal (Dash)": _fmt_val_cmp("Nominal Kontrak", d_row.get("Nominal Kontrak")),
+            "Nominal (DRP)": _fmt_val_cmp("Nominal Kontrak", drp_row.get("Nominal Kontrak")),
+            "Awal Kontrak (Dash)": _fmt_val_cmp("Periode Kontrak Awal", d_row.get("Periode Kontrak Awal")),
+            "Awal Kontrak (DRP)": _fmt_val_cmp("Periode Kontrak Awal", drp_row.get("Periode Kontrak Awal")),
+            "Akhir Kontrak (Dash)": _fmt_val_cmp("Periode Kontrak Akhir", d_row.get("Periode Kontrak Akhir")),
+            "Akhir Kontrak (DRP)": _fmt_val_cmp("Periode Kontrak Akhir", drp_row.get("Periode Kontrak Akhir")),
+            "No. Dokumen (Dash)": _fmt_val_cmp("No. Dokumen", d_row.get("No. Dokumen")),
+            "No. Dokumen (DRP)": _fmt_val_cmp("No. Dokumen", drp_row.get("No. Dokumen")),
+            "Zona (Dash)": _fmt_val_cmp("Zona", d_row.get("Zona")),
+            "Zona (DRP)": _fmt_val_cmp("Zona", drp_row.get("Zona")),
+            "Kategori Outlet (Dash)": _fmt_val_cmp("Kategori Outlet", d_row.get("Kategori Outlet")),
+            "Kategori Outlet (DRP)": _fmt_val_cmp("Kategori Outlet", drp_row.get("Kategori Outlet")),
+            "_raw_Brand": drp_row.get("Brand", pd.NA),
+            "_raw_Nominal Kontrak": drp_row.get("Nominal Kontrak", pd.NA),
+            "_raw_Periode Kontrak Awal": drp_row.get("Periode Kontrak Awal", pd.NA),
+            "_raw_Periode Kontrak Akhir": drp_row.get("Periode Kontrak Akhir", pd.NA),
+            "_raw_No. Dokumen": drp_row.get("No. Dokumen", pd.NA),
+            "_raw_Zona": drp_row.get("Zona", pd.NA),
+            "_raw_Kategori Outlet": drp_row.get("Kategori Outlet", pd.NA),
+        }
+
+        if diff_cols:
+            mismatch_rows.append(record)
+        else:
+            matched_ok_rows.append(record)
+
+    return (
+        pd.DataFrame(mismatch_rows),
+        pd.DataFrame(matched_ok_rows),
+        pd.DataFrame(missing_rows),
+    )
+
+
 def deduplicate_branding_data(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     records = frame.copy()
     records["_id_key"] = records["ID Customer"].map(customer_id_key)
@@ -504,6 +684,7 @@ def apply_branding_updates(contracts: pd.DataFrame, branding: pd.DataFrame) -> t
         "Nominal": "Nominal Kontrak",
         "Tanggal Pekerjaan Dari": "Periode Kontrak Awal",
         "Tanggal Pekerjaan Sampai": "Periode Kontrak Akhir",
+        "No. Dokumen": "No. Dokumen",
     }
     for _, record in selected.iterrows():
         key = customer_id_key(record["ID Customer"])
@@ -709,7 +890,7 @@ def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
             display_frame[column] = display_frame[column].map(lambda checked: "✅" if parse_tickmark(checked) else "—")
     priority_cols = [
         "Status Kontrak", "Sisa Hari", "ID Outlet", "Nama Customer",
-        "Brand", "Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir",
+        "Brand", "Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen",
         "Zona", "Sektor", "Pos Budget", "Kategori Outlet", "Kategori Pekerjaan",
     ]
     existing_priority = [c for c in priority_cols if c in display_frame.columns]
@@ -798,7 +979,7 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool,
 
         st.divider()
         st.markdown("##### 2. Detail Kontrak & Nilai")
-        k1, k2, k3, k4 = st.columns(4)
+        k1, k2, k3, k4, k5 = st.columns(5)
         brand = k1.text_input("Brand Utama", value=safe_text(current["Brand"]), key=f"brand_{suffix}")
         parsed_amount = parse_amount(current["Nominal Kontrak"])
         amount = k2.number_input(
@@ -810,6 +991,7 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool,
         )
         contract_start = k3.date_input("Tanggal Mulai", value=safe_date(current["Periode Kontrak Awal"]), key=f"start_{suffix}")
         contract_end = k4.date_input("Tanggal Berakhir", value=safe_date(current["Periode Kontrak Akhir"]), key=f"end_{suffix}")
+        doc_no = k5.text_input("No. Dokumen", value=safe_text(current.get("No. Dokumen", pd.NA)), key=f"doc_no_{suffix}")
 
         st.divider()
         st.markdown("##### 3. Materi Promosi & Spesifikasi Ukuran")
@@ -844,6 +1026,7 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool,
         "Nominal Kontrak": amount,
         "Periode Kontrak Awal": pd.Timestamp(contract_start) if contract_start else pd.NaT,
         "Periode Kontrak Akhir": pd.Timestamp(contract_end) if contract_end else pd.NaT,
+        "No. Dokumen": doc_no.strip() or pd.NA,
         **material_values,
         "Ukuran Panel Toko": panel_size.strip() or pd.NA,
         "Ukuran Sticker Panel Toko": sticker_size.strip() or pd.NA,
@@ -995,7 +1178,7 @@ if active_menu == "📊 Dashboard & Monitoring":
 
     search_col, status_col = st.columns([2, 1])
     search_query = search_col.text_input(
-        "Cari cepat (ID Outlet, Nama Customer, Alamat, atau Brand)",
+        "Cari cepat (ID Outlet, Nama Customer, Alamat, No. Dokumen, atau Brand)",
         placeholder="Ketik kata kunci pencarian...",
         key="dash_search_query",
     )
@@ -1034,6 +1217,7 @@ if active_menu == "📊 Dashboard & Monitoring":
             view["ID Outlet"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
             | view["Nama Customer"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
             | view["Alamat"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
+            | view["No. Dokumen"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
             | view["Brand"].fillna("").astype(str).str.casefold().str.contains(q, regex=False)
         )
         view = view[mask]
@@ -1091,9 +1275,6 @@ elif active_menu == "👥 Kelola Data Customer":
         "📑 Tambah Massal (Excel)",
     ])
 
-    # ------------------------------------------
-    # TAB 1: EDIT MULTIPLE DENGAN QUICK SEARCH
-    # ------------------------------------------
     with tab_multi_edit:
         if contracts.empty:
             st.info("Belum ada data customer untuk diedit. Silakan tambah customer baru atau import Excel.")
@@ -1182,6 +1363,7 @@ elif active_menu == "👥 Kelola Data Customer":
                             "Nominal Kontrak",
                             "Periode Kontrak Awal",
                             "Periode Kontrak Akhir",
+                            "No. Dokumen",
                             "Zona",
                             "Sektor",
                             "Pos Budget",
@@ -1328,9 +1510,6 @@ elif active_menu == "👥 Kelola Data Customer":
                     except Exception as error:
                         st.error(f"Gagal menghapus customer terpilih: {error}")
 
-    # ------------------------------------------
-    # TAB 2: EDIT SATUAN (FORM DETAIL)
-    # ------------------------------------------
     with tab_single_edit:
         if contracts.empty:
             st.info("Belum ada data customer. Silakan tambah customer baru atau import Excel.")
@@ -1375,9 +1554,6 @@ elif active_menu == "👥 Kelola Data Customer":
                     except Exception as error:
                         st.error(f"Gagal menghapus customer: {error}")
 
-    # ------------------------------------------
-    # TAB 3: TAMBAH MANUAL
-    # ------------------------------------------
     with tab_add_manual:
         blank_record = pd.Series({column: pd.NA for column in COLUMNS})
         submitted, new_record = render_outlet_form(blank_record, None)
@@ -1395,9 +1571,6 @@ elif active_menu == "👥 Kelola Data Customer":
                 except Exception as error:
                     st.error(f"Gagal menyimpan customer baru: {error}")
 
-    # ------------------------------------------
-    # TAB 4: TAMBAH MASSAL EXCEL
-    # ------------------------------------------
     with tab_add_batch:
         st.markdown("##### Langkah 1: Unduh Template Excel")
         sample_row = pd.DataFrame(
@@ -1414,6 +1587,7 @@ elif active_menu == "👥 Kelola Data Customer":
                 "Nominal Kontrak": 1500000,
                 "Periode Kontrak Awal": pd.Timestamp("2026-01-01"),
                 "Periode Kontrak Akhir": pd.Timestamp("2026-12-31"),
+                "No. Dokumen": "BRN-26/1/5SBB/999",
                 "Panel Toko": True,
                 "Showcase": False,
                 "Layar Toko": False,
@@ -1499,9 +1673,10 @@ elif active_menu == "👥 Kelola Data Customer":
 # HALAMAN 3: IMPORT & SINKRONISASI
 # ==========================================
 elif active_menu == "🔄 Import & Sinkronisasi":
-    tab_main_import, tab_branding, tab_panel_sync = st.tabs([
+    tab_main_import, tab_branding, tab_drp_crosscheck, tab_panel_sync = st.tabs([
         "📥 Replace Workbook Utama",
         "🏷️ Update SPKS Branding",
+        "🔎 Crosscheck Data DRP",
         "📐 Sinkronisasi Ukuran Panel & Layar",
     ])
 
@@ -1592,6 +1767,189 @@ elif active_menu == "🔄 Import & Sinkronisasi":
             if not missing_ids.empty:
                 with st.expander(f"Lihat {len(missing_ids)} ID yang Tidak Ditemukan di Database"):
                     st.dataframe(missing_ids, use_container_width=True, hide_index=True)
+
+    with tab_drp_crosscheck:
+        st.markdown("#### 🔎 Crosscheck Data DRP dengan Dashboard & Monitoring")
+        st.caption(
+            "Unggah file Excel DRP (contoh: `CODPR03 (DRP).xlsx`) untuk mencocokkan data berdasarkan **ID Customer** "
+            "dan langsung memperbarui data yang tidak sesuai ke Dashboard."
+        )
+
+        drp_upload = st.file_uploader(
+            "Upload File Excel DRP (.xlsx)",
+            type=["xlsx"],
+            key="drp_crosscheck_upload",
+        )
+
+        available_compare_fields = [
+            "Brand",
+            "Nominal Kontrak",
+            "Periode Kontrak Awal",
+            "Periode Kontrak Akhir",
+            "No. Dokumen",
+            "Zona",
+            "Kategori Outlet",
+        ]
+        selected_compare_fields = st.multiselect(
+            "Pilih Kolom yang Dicocokkan",
+            options=available_compare_fields,
+            default=["Brand", "Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen"],
+            key="drp_compare_fields",
+        )
+
+        if st.button("🚀 Jalankan Crosscheck DRP", type="primary", key="btn_run_drp_crosscheck"):
+            if drp_upload is None:
+                st.warning("Pilih file Excel DRP terlebih dahulu.")
+            elif not selected_compare_fields:
+                st.warning("Pilih minimal satu kolom untuk dicocokkan.")
+            else:
+                try:
+                    drp_parsed = read_drp_crosscheck_workbook(drp_upload)
+                    st.session_state["drp_crosscheck_source"] = drp_parsed
+                    st.session_state["drp_crosscheck_fields"] = list(selected_compare_fields)
+                except Exception as error:
+                    st.error(f"Gagal membaca file DRP: {error}")
+
+        drp_source_df = st.session_state.get("drp_crosscheck_source")
+        active_fields = st.session_state.get("drp_crosscheck_fields", selected_compare_fields)
+
+        if drp_source_df is not None and not drp_source_df.empty:
+            mismatch_df, matched_ok_df, missing_df = build_drp_crosscheck_report(
+                st.session_state.contracts,
+                drp_source_df,
+                active_fields,
+            )
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total Data DRP", len(drp_source_df))
+            m2.metric("Sesuai Semua", len(matched_ok_df))
+            m3.metric("Tidak Sesuai", len(mismatch_df))
+            m4.metric("ID Belum Ada di Dashboard", len(missing_df))
+
+            sub_mismatch, sub_ok, sub_missing = st.tabs([
+                f"⚠️ Tidak Sesuai ({len(mismatch_df)})",
+                f"✅ Sudah Sesuai ({len(matched_ok_df)})",
+                f"❓ ID Tidak di Dashboard ({len(missing_df)})",
+            ])
+
+            with sub_mismatch:
+                if mismatch_df.empty:
+                    st.success("✅ Seluruh data DRP yang cocok dengan ID di Dashboard sudah sesuai!")
+                else:
+                    st.markdown("**Data Tidak Sesuai — Pilih Baris & Kolom untuk Update ke Dashboard**")
+                    fields_to_apply = st.multiselect(
+                        "Kolom yang akan di-update ke Dashboard",
+                        options=available_compare_fields,
+                        default=active_fields,
+                        key="drp_fields_to_apply",
+                    )
+                    select_all_mismatch = st.checkbox(
+                        "Pilih semua baris tidak sesuai",
+                        value=True,
+                        key="drp_select_all_mismatch",
+                    )
+
+                    display_cols = [
+                        "ID Customer",
+                        "Nama Customer (Dashboard)",
+                        "Nama Customer (DRP)",
+                        "Kolom Tidak Sesuai",
+                        "Brand (Dash)",
+                        "Brand (DRP)",
+                        "Nominal (Dash)",
+                        "Nominal (DRP)",
+                        "Awal Kontrak (Dash)",
+                        "Awal Kontrak (DRP)",
+                        "Akhir Kontrak (Dash)",
+                        "Akhir Kontrak (DRP)",
+                        "No. Dokumen (Dash)",
+                        "No. Dokumen (DRP)",
+                        "Zona (Dash)",
+                        "Zona (DRP)",
+                        "Kategori Outlet (Dash)",
+                        "Kategori Outlet (DRP)",
+                    ]
+
+                    editor_df = mismatch_df[display_cols].copy()
+                    editor_df.insert(0, "Pilih Update", select_all_mismatch)
+
+                    edited_mismatch = st.data_editor(
+                        editor_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=420,
+                        disabled=display_cols,
+                        key="drp_mismatch_editor",
+                    )
+
+                    dl_col, upd_col = st.columns(2)
+                    dl_col.download_button(
+                        "📥 Download Laporan Selisih DRP (.xlsx)",
+                        data=excel_bytes(mismatch_df[display_cols]),
+                        file_name="Crosscheck_Selisih_DRP.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                    )
+
+                    if upd_col.button(
+                        "💾 Update Data Terpilih ke Dashboard",
+                        type="primary",
+                        use_container_width=True,
+                        key="btn_apply_drp_updates",
+                    ):
+                        if not fields_to_apply:
+                            st.warning("Pilih minimal satu kolom yang akan di-update.")
+                        else:
+                            selected_mask = edited_mismatch["Pilih Update"].fillna(False).to_numpy(dtype=bool)
+                            rows_to_update = mismatch_df.loc[selected_mask]
+                            if rows_to_update.empty:
+                                st.warning("Centang minimal satu baris data untuk di-update.")
+                            else:
+                                updated_contracts = normalize_data(st.session_state.contracts).copy()
+                                updated_counter = 0
+                                for _, r in rows_to_update.iterrows():
+                                    target_idx = int(r["_dash_index"])
+                                    changed = False
+                                    for col in fields_to_apply:
+                                        raw_val = r.get(f"_raw_{col}", pd.NA)
+                                        if pd.isna(raw_val) or (isinstance(raw_val, str) and not raw_val.strip()):
+                                            continue
+                                        if _is_field_different(col, updated_contracts.at[target_idx, col], raw_val):
+                                            updated_contracts.at[target_idx, col] = raw_val
+                                            changed = True
+                                    if changed:
+                                        updated_counter += 1
+
+                                problems = validate_data(updated_contracts)
+                                if problems:
+                                    st.error("\n".join(problems))
+                                else:
+                                    save_data(updated_contracts)
+                                    st.session_state.contracts = normalize_data(updated_contracts)
+                                    st.success(f"✅ Berhasil meng-update {updated_counter} outlet di Dashboard sesuai data DRP!")
+                                    st.rerun()
+
+            with sub_ok:
+                if matched_ok_df.empty:
+                    st.info("Belum ada data yang sesuai sepenuhnya pada kolom yang dipilih.")
+                else:
+                    ok_cols = [
+                        "ID Customer",
+                        "Nama Customer (Dashboard)",
+                        "Brand (DRP)",
+                        "Nominal (DRP)",
+                        "Awal Kontrak (DRP)",
+                        "Akhir Kontrak (DRP)",
+                        "No. Dokumen (DRP)",
+                    ]
+                    st.dataframe(matched_ok_df[ok_cols], use_container_width=True, hide_index=True)
+
+            with sub_missing:
+                if missing_df.empty:
+                    st.info("Seluruh ID Customer pada file DRP sudah terdaftar di Dashboard.")
+                else:
+                    st.caption("ID Customer berikut ada di file DRP namun belum terdaftar di Dashboard & Monitoring.")
+                    st.dataframe(missing_df, use_container_width=True, hide_index=True)
 
     with tab_panel_sync:
         st.caption("Mencocokkan ukuran sticker panel, brand panel, dan ukuran layar dari sheet DRP berdasarkan ID Customer.")
