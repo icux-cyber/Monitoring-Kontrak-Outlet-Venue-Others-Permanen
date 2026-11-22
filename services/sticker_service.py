@@ -77,7 +77,7 @@ def is_sticker_or_vinyl_panel_toko(value) -> bool:
         return False
     return bool(
         re.search(
-            r"\b(?:sticker|stiker|vinyl)\s+panel\s+toko\b",
+            r"\b(?:sticker|stiker|vinyl)(?:\s*/\s*vinyl)?\s+panel(?:\s+toko)?\b",  # <-- diubah
             str(value).strip(),
             flags=re.IGNORECASE,
         )
@@ -509,7 +509,10 @@ def apply_sticker_replacement_orders(
         raw_vendor = order.get("Nama Vendor", pd.NA)
         raw_date = order.get(
             "Tanggal OrderPenggantian Sticker / Vinyl",
-            order.get("Tanggal Penggantian Sticker Panel", pd.NaT),
+            order.get(
+                "Tanggal Penggantian Sticker / Vinyl Panel",
+                order.get("Tanggal Penggantian Sticker Panel", pd.NaT),
+            ),  # <-- diubah
         )
 
         id_str = safe_text(raw_id)
@@ -556,7 +559,7 @@ def apply_sticker_replacement_orders(
             if pd.notna(vendor_val) and str(vendor_val).strip() != "":
                 target.at[r_idx, "Nama Vendor"] = vendor_val
             if not pd.isna(date_val):
-                target.at[r_idx, "Tanggal Penggantian Sticker Panel"] = date_val
+                target.at[r_idx, "Tanggal Penggantian Sticker / Vinyl Panel"] = date_val  # <-- diubah
             if (pd.notna(size_val) and str(size_val).strip() != "") or (pd.notna(brand_val) and str(brand_val).strip() != ""):
                 target.at[r_idx, "Panel Toko"] = True
             updated_rows_set.add(r_idx)
@@ -611,22 +614,26 @@ def read_sticker_order_excel(source) -> pd.DataFrame:
             "Material",
             "Ukuran Sticker",
             "Ukuran Sticker / Vinyl",
+            "Ukuran Sticker / Vinyl Panel Toko",  # <-- diubah
             "Ukuran Sticker Panel Toko",
+            "Ukuran Sticker / Vinyl Panel",  # <-- diubah
             "Ukuran Sticker Panel",
             "Ukuran Stiker",
         ),
-        "Brand": pick("Brand", "Brand Sticker", "Brand Panel", "Merek Sticker", "Merek Panel"),
-        "Version": pick("Version", "Versi", "Versi Sticker", "Versi Panel"),
+        "Brand": pick("Brand", "Brand Sticker", "Brand Sticker / Vinyl", "Brand Panel", "Merek Sticker", "Merek Panel"),  # <-- diubah
+        "Version": pick("Version", "Versi", "Versi Sticker", "Versi Sticker / Vinyl", "Versi Panel"),  # <-- diubah
         "Jumlah Sticker / Vinyl": pick("Jumlah Sticker / Vinyl", "Jumlah", "Qty", "Jumlah Sticker"),
         "Tanggal OrderPenggantian Sticker / Vinyl": pick(
             "Tanggal OrderPenggantian Sticker / Vinyl",
             "Tanggal Order Penggantian Sticker / Vinyl",
+            "Tanggal Penggantian Sticker / Vinyl Panel",  # <-- diubah
             "Tanggal Penggantian Sticker Panel",
             "Tanggal Penggantian",
+            "Tanggal Penggantian Terakhir Sticker / Vinyl Panel",  # <-- diubah
             "Tanggal Penggantian Terakhir Sticker Panel",
             "Tgl Penggantian",
         ),
-        "Nama Vendor": pick("Nama Vendor", "Vendor", "Nama Vendor Sticker"),
+        "Nama Vendor": pick("Nama Vendor", "Vendor", "Nama Vendor Sticker", "Nama Vendor Sticker / Vinyl"),  # <-- diubah
     })
 
     for col in ("ID Outlet", "Nama Outlet", "Alamat", "Material", "Brand", "Version", "Nama Vendor"):
@@ -751,7 +758,7 @@ def _generate_sticker_order_png_cached(payload_json: str, tanggal_order: str, na
     ax.text(
         0.015,
         0.93,
-        f"HASIL PEMESANAN PENGGANTIAN STICKER / VINYL PANEL TOKO   |   Tanggal: {tanggal_order}   |   Vendor: {nama_vendor or 'Semua'}",
+        f"HASIL PEMESANAN PENGGANTIAN STICKER / VINYL PANEL TOKO   |   Tanggal: {tanggal_order}   |   Vendor: {nama_vendor or 'Semua'}",  # <-- diubah
         ha="left",
         va="center",
         fontsize=10.5,
