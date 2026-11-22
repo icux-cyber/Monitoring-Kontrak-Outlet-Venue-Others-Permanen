@@ -273,7 +273,7 @@ def render_dashboard_table(title: str, frame: pd.DataFrame, download_filename: s
         formatted_df = formatted_df[cols]  # <-- diubah
 
     st.dataframe(
-        formatted_df,
+        format_outlet_table(sorted_frame),
         width="stretch",
         hide_index=True,
         height=440,
@@ -283,12 +283,11 @@ def render_dashboard_table(title: str, frame: pd.DataFrame, download_filename: s
             "ID Outlet": st.column_config.TextColumn("ID Outlet", width="small"),
             "Nama Customer": st.column_config.TextColumn("Nama Customer", width="large"),
             "Nominal Kontrak": st.column_config.TextColumn("Nominal Kontrak", width="medium"),
-            "Ukuran Panel Toko": st.column_config.TextColumn("Ukuran Panel Toko", width="medium"),  # <-- diubah
+            "Ukuran Panel Toko": st.column_config.TextColumn("Ukuran Panel Toko", width="medium"),
             "Ukuran Sticker Panel Toko": st.column_config.TextColumn("Ukuran Sticker / Vinyl Panel", width="medium"),
-            "Ukuran Sticker / Vinyl Panel": st.column_config.TextColumn("Ukuran Sticker / Vinyl Panel", width="medium"),
             "Brand Panel": st.column_config.TextColumn("Brand Sticker / Vinyl", width="medium"),
             "Versi": st.column_config.TextColumn("Versi", width="small"),
-            "Tanggal Penggantian Sticker Panel": st.column_config.TextColumn("Tgl Ganti Sticker / Vinyl Terakhir", width="medium"),
+            "Tanggal Penggantian Sticker / Vinyl Panel": st.column_config.TextColumn("Tgl Ganti Sticker / Vinyl Terakhir", width="medium"),
             "Nama Vendor": st.column_config.TextColumn("Nama Vendor", width="medium"),
         },
     )
