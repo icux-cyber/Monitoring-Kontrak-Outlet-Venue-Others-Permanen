@@ -19,7 +19,7 @@ DRP_SHEET_NAME = "Pemesanan Layar DRP"
 
 MATERIAL_COLUMNS = ["Panel Toko", "Showcase", "Layar Toko", "Shop Sign / Neon Box"]
 SYNC_PANEL_SCREEN_COLUMNS = [
-    "Ukuran Sticker / Vinyl Panel Toko",
+    "Ukuran Sticker Panel Toko",
     "Brand Panel",
     "Versi",
     "Ukuran Layar",
@@ -28,22 +28,22 @@ SYNC_PANEL_SCREEN_COLUMNS = [
 DATE_COLUMNS = [
     "Periode Kontrak Awal",
     "Periode Kontrak Akhir",
-    "Tanggal Penggantian Sticker / Vinyl Panel",
+    "Tanggal Penggantian Sticker Panel",
 ]
 COLUMNS = [
     "ID Outlet", "Nama Customer", "Alamat", "Zona", "Sektor", "Pos Budget",
     "Kategori Outlet", "Kategori Pekerjaan", "Brand", "Nominal Kontrak",
     "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen", *MATERIAL_COLUMNS,
-    "Ukuran Panel Toko", "Ukuran Sticker / Vinyl Panel Toko", "Brand Panel", "Versi",
-    "Tanggal Penggantian Sticker Panel / Vinyl", "Nama Vendor",
+    "Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Brand Panel", "Versi",
+    "Tanggal Penggantian Sticker Panel", "Nama Vendor",
     "Ukuran Layar", "Brand Layar",
 ]
 CONTENT_COLUMNS = [
     "ID Outlet", "Nama Customer", "Alamat", "Zona", "Sektor", "Pos Budget",
     "Kategori Outlet", "Kategori Pekerjaan", "Brand", "Nominal Kontrak",
     "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen",
-    "Ukuran Panel Toko", "Ukuran Sticker / Vinyl Panel Toko", "Brand Panel", "Versi",
-    "Tanggal Penggantian Sticker Panel / Vinyl", "Nama Vendor",
+    "Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Brand Panel", "Versi",
+    "Tanggal Penggantian Sticker Panel", "Nama Vendor",
     "Ukuran Layar", "Brand Layar",
 ]
 SEARCH_SOURCE_COLUMNS = [
@@ -69,41 +69,41 @@ ALIASES = {
     "Layar Toko": ("Layar Toko", "Layar", "Materi Layar Toko"),
     "Shop Sign / Neon Box": ("Shop Sign / Neon Box", "Shop Sign", "Neon Box", "Materi Shop Sign / Neon Box"),
     "Ukuran Panel Toko": ("Ukuran Panel Toko", "Size Panel Toko", "Panel"),
-    "Ukuran Sticker / Vinyl Panel Toko": (
-        "Ukuran Sticker / Vinyl Panel Toko",
-        "Ukuran Sticker Panel / Vinyl",
+    "Ukuran Sticker Panel Toko": (
+        "Ukuran Sticker Panel Toko",
+        "Ukuran Sticker Panel",
+        "Ukuran Sticker",
         "Ukuran Sticker / Vinyl",
-        "Ukuran Sticker / Vinyl",
-        "Ukuran Sticker / Vinyl Panel (diluar Nama Toko)",
-        "Ukuran Sticker / Vinyl Panel Toko",
-        "Size Sticker / Vinyl Panel Toko",
+        "Ukuran Sticker Panel (diluar Nama Toko)",
+        "Ukuran Stiker Panel Toko",
+        "Size Sticker Panel Toko",
         "Material",
     ),
     "Brand Panel": (
         "Brand Panel",
-        "Brand Sticker / Vinyl",
-        "Brand Planning - Sticker / Vinyl Panel",
+        "Brand Sticker",
+        "Brand Planning - Sticker Panel",
         "Merek Panel",
     ),
     "Versi": (
         "Versi",
         "Version",
-        "Versi Sticker / Vinyl",
+        "Versi Sticker",
         "Versi Panel",
     ),
-    "Tanggal Penggantian Sticker / Vinyl Panel": (
+    "Tanggal Penggantian Sticker Panel": (
         "Tanggal Penggantian Sticker Panel",
         "Tanggal OrderPenggantian Sticker / Vinyl",
         "Tanggal Order Penggantian Sticker / Vinyl",
-        "Tanggal Penggantian Terakhir Sticker / Vinyl Panel",
-        "Tgl Penggantian Sticker / Vinyl Panel",
+        "Tanggal Penggantian Terakhir Sticker Panel",
+        "Tgl Penggantian Sticker Panel",
         "Tgl Penggantian Terakhir",
-        "Tanggal Ganti Sticker / Vinyl",
+        "Tanggal Ganti Sticker",
     ),
     "Nama Vendor": (
         "Nama Vendor",
         "Vendor",
-        "Nama Vendor Sticker / Vinyl",
+        "Nama Vendor Sticker",
     ),
     "Ukuran Layar": ("Ukuran Layar", "Layar", "Materi Layar Toko", "Size Layar"),
     "Brand Layar": ("Brand Layar", "Brand Planning - Layar DRP", "Merek Layar"),
@@ -271,7 +271,7 @@ def normalize_data(frame: pd.DataFrame) -> pd.DataFrame:
     for column in text_columns:
         normalized[column] = normalized[column].astype("string").str.strip()
         normalized[column] = normalized[column].replace({"": pd.NA, "<NA>": pd.NA, "nan": pd.NA, "None": pd.NA})
-    for column in ("Ukuran Panel Toko", "Ukuran Sticker / Vinyl Panel Toko", "Ukuran Layar"):
+    for column in ("Ukuran Panel Toko", "Ukuran Sticker Panel Toko", "Ukuran Layar"):
         normalized[column] = normalized[column].map(extract_sizes)
     normalized["Nominal Kontrak"] = normalized["Nominal Kontrak"].map(parse_amount)
     contract_material_source = lowered.get("materi kontrak")
@@ -605,7 +605,7 @@ def format_outlet_table(frame: pd.DataFrame) -> pd.DataFrame:
     priority_cols = [
         "Status Kontrak", "Sisa Hari", "ID Outlet", "Nama Customer",
         "Brand", "Nominal Kontrak", "Periode Kontrak Awal", "Periode Kontrak Akhir", "No. Dokumen",
-        "Ukuran Sticker / Vinyl Panel Toko", "Brand Panel", "Versi", "Tanggal Penggantian Sticker / Vinyl Panel", "Nama Vendor",
+        "Ukuran Sticker Panel Toko", "Brand Panel", "Versi", "Tanggal Penggantian Sticker Panel", "Nama Vendor",
         "Zona", "Sektor", "Pos Budget", "Kategori Outlet", "Kategori Pekerjaan",
     ]
     existing_priority = [c for c in priority_cols if c in display_frame.columns]
