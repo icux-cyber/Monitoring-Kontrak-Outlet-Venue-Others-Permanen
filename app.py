@@ -208,7 +208,7 @@ def reset_multi_edit_state() -> None:
     st.session_state["multi_edit_zone"] = "Semua Zona"
     st.session_state["multi_edit_status"] = "Semua Status"
     st.session_state["multi_select_all_state"] = False
-    st.session_state["confirm_delete_multi_cb"] = False
+    st.session_state.pop("confirm_delete_multi_cb", None)
     st.session_state.pop("multi_customer_data_editor", None)
 
 
@@ -828,7 +828,7 @@ elif active_menu == "👥 Kelola Data Customer":
                         saved_df = save_data(remaining_df, already_normalized=True)
                         set_contracts_state(saved_df, already_normalized=True)
                         st.session_state.multi_select_all_state = False
-                        st.session_state["confirm_delete_multi_cb"] = False
+                        st.session_state.pop("confirm_delete_multi_cb", None)
                         st.session_state.pop("multi_customer_data_editor", None)
                         st.success(f"✅ {len(indices_to_drop)} customer terpilih berhasil dihapus.")
                         st.rerun()
@@ -1325,7 +1325,7 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":
         if clr_col.button("🧹 Hapus Semua Log", width="stretch", disabled=not confirm_clear_log, key="btn_clear_order_session"):
             st.session_state.sticker_order_results = save_sticker_order_log([])
             st.session_state.pop("sticker_order_png_bytes", None)
-            st.session_state["confirm_clear_sticker_log"] = False
+            st.session_state.pop("confirm_clear_sticker_log", None)
             st.rerun()
 
         if png_bytes_ready:
@@ -1994,7 +1994,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                                 remaining_df = st.session_state.contracts.drop(index=indices_to_drop).reset_index(drop=True)
                                 saved_df = save_data(remaining_df, already_normalized=True)
                                 set_contracts_state(saved_df, already_normalized=True)
-                                st.session_state["confirm_del_dash_only_rows"] = False
+                                st.session_state.pop("confirm_del_dash_only_rows", None)
                                 st.success(f"✅ Berhasil menghapus {len(indices_to_drop)} baris terpilih dari Dashboard!")
                                 st.rerun()
 
@@ -2015,7 +2015,7 @@ elif active_menu == "🔄 Import & Sinkronisasi":
                                 remaining_df = st.session_state.contracts.drop(index=indices_to_drop_all).reset_index(drop=True)
                                 saved_df = save_data(remaining_df, already_normalized=True)
                                 set_contracts_state(saved_df, already_normalized=True)
-                                st.session_state["confirm_del_dash_only_all"] = False
+                                st.session_state.pop("confirm_del_dash_only_all", None)
                                 st.success(f"✅ Berhasil menghapus semua ({len(indices_to_drop_all)} baris) data yang tidak ada di file upload DRP!")
                                 st.rerun()
 
