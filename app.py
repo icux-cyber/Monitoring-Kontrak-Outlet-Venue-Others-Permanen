@@ -96,6 +96,16 @@ def render_sticker_order_png_with_material(
     if df is None or df.empty:
         return generate_sticker_order_png(df, tgl_ringkas, vendor_ringkas)
 
+    df_sorted = df.copy()
+    df_sorted["_sort_mat"] = (
+        df_sorted.apply(
+            lambda r: (safe_text(r.get("Material")) or safe_text(r.get("Ukuran")) or "").casefold(),
+            axis=1,
+        )
+    )
+    df_sorted["_sort_brand"] = df_sorted["Brand"].fillna("").astype(str).map(lambda x: x.strip().casefold())
+    df_sorted = df_sorted.sort_values(by=["_sort_mat", "_sort_brand"], kind="mergesort").reset_index(drop=True)
+
     headers = [
         "No",
         "Nama Outlet",
@@ -108,7 +118,7 @@ def render_sticker_order_png_with_material(
         "Vendor",
     ]
     rows: list[list[str]] = []
-    for idx, (_, r) in enumerate(df.iterrows(), start=1):
+    for idx, (_, r) in enumerate(df_sorted.iterrows(), start=1):
         mat_val = safe_text(r.get("Material")) or safe_text(r.get("Ukuran")) or "-"
         qty_raw = r.get("Jumlah Sticker / Vinyl", 0)
         try:
@@ -1423,7 +1433,18 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":
 
         st.dataframe(df_log_view, width="stretch", hide_index=True, height=320)
 
-        target_export_df = df_log_view if not df_log_view.empty else df_order_hasil
+        target_export_df = (df_log_view if not df_log_view.empty else df_order_hasil).copy()
+        if not target_export_df.empty:
+            target_export_df["_sort_mat"] = target_export_df.apply(
+                lambda r: (safe_text(r.get("Material")) or safe_text(r.get("Ukuran")) or "").casefold(),
+                axis=1,
+            )
+            target_export_df["_sort_brand"] = target_export_df["Brand"].fillna("").astype(str).map(lambda x: x.strip().casefold())
+            target_export_df = (
+                target_export_df.sort_values(by=["_sort_mat", "_sort_brand"], kind="mergesort")
+                .drop(columns=["_sort_mat", "_sort_brand"])
+                .reset_index(drop=True)
+            )
         first_row = target_export_df.iloc[0]
         tgl_ringkas = (
             log_date_filter
