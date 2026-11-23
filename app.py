@@ -82,6 +82,110 @@ st.set_page_config(
 )
 
 
+def render_sticker_order_png_with_material(
+    df: pd.DataFrame,
+    tgl_ringkas: str,
+    vendor_ringkas: str,
+) -> bytes:
+    """Generate gambar PNG tabel hasil pemesanan (tanpa ID Outlet) dengan kolom Material."""
+    import io
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if df is None or df.empty:
+        return generate_sticker_order_png(df, tgl_ringkas, vendor_ringkas)
+
+    headers = [
+        "No",
+        "Nama Outlet",
+        "Alamat",
+        "Material",
+        "Brand",
+        "Version",
+        "Qty",
+        "Tgl Order",
+        "Vendor",
+    ]
+    rows: list[list[str]] = []
+    for idx, (_, r) in enumerate(df.iterrows(), start=1):
+        mat_val = safe_text(r.get("Material")) or safe_text(r.get("Ukuran")) or "-"
+        qty_raw = r.get("Jumlah Sticker / Vinyl", 0)
+        try:
+            qty_str = str(int(float(qty_raw)))
+        except Exception:
+            qty_str = safe_text(qty_raw) or "0"
+        rows.append([
+            str(idx),
+            safe_text(r.get("Nama Outlet")) or "-",
+            safe_text(r.get("Alamat")) or "-",
+            mat_val,
+            safe_text(r.get("Brand")) or "-",
+            safe_text(r.get("Version")) or "-",
+            qty_str,
+            safe_text(r.get("Tanggal OrderPenggantian Sticker / Vinyl")) or "-",
+            safe_text(r.get("Nama Vendor")) or "-",
+        ])
+
+    # Auto-adjust lebar tiap kolom berdasarkan panjang karakter maksimum
+    col_lens = [
+        max(len(headers[c]), *(len(row[c]) for row in rows))
+        for c in range(len(headers))
+    ]
+    min_widths = [4, 18, 22, 20, 14, 12, 5, 11, 12]
+    max_widths = [5, 34, 42, 34, 24, 22, 6, 13, 20]
+    adj_lens = [
+        max(min_widths[i], min(max_widths[i], col_lens[i] + 3))
+        for i in range(len(headers))
+    ]
+    total_units = sum(adj_lens)
+    col_widths = [w / total_units for w in adj_lens]
+
+    fig_w = max(13.5, min(24.0, total_units * 0.135))
+    row_h = 0.44
+    fig_h = max(2.8, 1.35 + (len(rows) + 1) * row_h)
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=180)
+    ax.axis("off")
+
+    title_text = f"Hasil Pemesanan Penggantian Sticker / Vinyl Panel ({len(rows)} Item)"
+    subtitle_text = f"Tanggal Order: {tgl_ringkas}   |   Vendor: {vendor_ringkas}"
+    fig.text(0.015, 1.0 - (0.34 / fig_h), title_text, fontsize=13, fontweight="bold", color="#0f172a", va="top")
+    fig.text(0.015, 1.0 - (0.72 / fig_h), subtitle_text, fontsize=9.5, color="#475569", va="top")
+
+    table_top = 1.0 - (1.08 / fig_h)
+    table_height = max(0.35, table_top - 0.03)
+    table = ax.table(
+        cellText=rows,
+        colLabels=headers,
+        colWidths=col_widths,
+        loc="upper center",
+        bbox=[0.0, 0.02, 1.0, table_height],
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(8.5)
+
+    center_cols = {0, 6, 7}
+    for (r_idx, c_idx), cell in table.get_celld().items():
+        cell.set_edgecolor("#cbd5e1")
+        cell.set_linewidth(0.6)
+        if r_idx == 0:
+            cell.set_facecolor("#1e3a8a")
+            cell.get_text().set_color("#ffffff")
+            cell.get_text().set_weight("bold")
+            cell.get_text().set_ha("center")
+        else:
+            cell.set_facecolor("#f8fafc" if r_idx % 2 == 0 else "#ffffff")
+            cell.get_text().set_color("#0f172a")
+            cell.get_text().set_ha("center" if c_idx in center_cols else "left")
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.22, facecolor="#ffffff")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     if df is None:
         return pd.DataFrame(columns=COLUMNS)
@@ -1270,11 +1374,25 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":
     if df_order_hasil.empty:
         st.info("Belum ada log hasil pemesanan penggantian sticker / vinyl panel. Silakan input form atau upload file Excel pemesanan terlebih dahulu.")
     else:
-        log_q_col, log_v_col = st.columns([2, 1])
+        log_q_col, log_t_col, log_v_col = st.columns([2, 1.1, 1.1])
         log_search = log_q_col.text_input(
-            "Cari di Log Hasil Pemesanan (Outlet, Brand, Version, Vendor, atau Tanggal)",
+            "Cari di Log Hasil Pemesanan (Outlet, Material, Brand, Version, Vendor, atau Tanggal)",
             placeholder="Ketik kata kunci...",
             key="sticker_log_search",
+        )
+        tgl_col_name = "Tanggal OrderPenggantian Sticker / Vinyl"
+        log_dates = ["Semua Tanggal"] + sorted(
+            [
+                t
+                for t in df_order_hasil[tgl_col_name].dropna().astype(str).map(str.strip).unique()
+                if t and t != "-"
+            ],
+            reverse=True,
+        )
+        log_date_filter = log_t_col.selectbox(
+            "Filter Tanggal Order Penggantian",
+            log_dates,
+            key="sticker_log_date",
         )
         log_vendors = ["Semua Vendor"] + sorted(
             [v for v in df_order_hasil["Nama Vendor"].dropna().astype(str).unique() if v and v != "-"]
@@ -1284,14 +1402,22 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":
         df_log_view = df_order_hasil.copy()
         if log_search.strip():
             lq = log_search.strip().casefold()
+            mat_series = (
+                df_log_view["Material"].fillna("").astype(str)
+                if "Material" in df_log_view.columns
+                else pd.Series("", index=df_log_view.index)
+            )
             l_mask = (
                 df_log_view["Nama Outlet"].fillna("").astype(str).str.casefold().str.contains(lq, regex=False)
+                | mat_series.str.casefold().str.contains(lq, regex=False)
                 | df_log_view["Brand"].fillna("").astype(str).str.casefold().str.contains(lq, regex=False)
                 | df_log_view["Version"].fillna("").astype(str).str.casefold().str.contains(lq, regex=False)
                 | df_log_view["Nama Vendor"].fillna("").astype(str).str.casefold().str.contains(lq, regex=False)
-                | df_log_view["Tanggal OrderPenggantian Sticker / Vinyl"].fillna("").astype(str).str.casefold().str.contains(lq, regex=False)
+                | df_log_view[tgl_col_name].fillna("").astype(str).str.casefold().str.contains(lq, regex=False)
             )
             df_log_view = df_log_view[l_mask]
+        if log_date_filter != "Semua Tanggal":
+            df_log_view = df_log_view[df_log_view[tgl_col_name].fillna("").astype(str).str.strip() == log_date_filter]
         if log_vendor_filter != "Semua Vendor":
             df_log_view = df_log_view[df_log_view["Nama Vendor"] == log_vendor_filter]
 
@@ -1299,7 +1425,11 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":
 
         target_export_df = df_log_view if not df_log_view.empty else df_order_hasil
         first_row = target_export_df.iloc[0]
-        tgl_ringkas = safe_text(first_row.get("Tanggal OrderPenggantian Sticker / Vinyl")) or date.today().strftime("%d/%m/%Y")
+        tgl_ringkas = (
+            log_date_filter
+            if log_date_filter != "Semua Tanggal"
+            else (safe_text(first_row.get(tgl_col_name)) or date.today().strftime("%d/%m/%Y"))
+        )
         vendor_ringkas = (
             log_vendor_filter
             if log_vendor_filter != "Semua Vendor"
@@ -1317,8 +1447,8 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":
 
         png_bytes_ready = st.session_state.get("sticker_order_png_bytes")
         if dl_png_col.button("🖼️ Generate Gambar PNG (Tanpa ID Outlet)", width="stretch", key="btn_prep_png"):
-            with st.spinner("Menghasilkan gambar .PNG dengan auto-adjust kolom..."):
-                png_bytes_ready = generate_sticker_order_png(target_export_df, tgl_ringkas, vendor_ringkas)
+            with st.spinner("Menghasilkan gambar .PNG dengan kolom Material & auto-adjust kolom..."):
+                png_bytes_ready = render_sticker_order_png_with_material(target_export_df, tgl_ringkas, vendor_ringkas)
                 st.session_state["sticker_order_png_bytes"] = png_bytes_ready
 
         confirm_clear_log = clr_chk_col.checkbox("Konfirmasi hapus log", value=False, key="confirm_clear_sticker_log")
