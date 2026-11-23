@@ -213,17 +213,21 @@ def reset_multi_edit_state() -> None:
 
 
 def reset_sticker_single_form() -> None:
-    st.session_state["sticker_order_id"] = ""
-    st.session_state["sticker_order_name"] = ""
-    st.session_state["sticker_order_alamat"] = ""
-    st.session_state["sticker_order_material"] = ""
-    st.session_state["sticker_order_brand"] = ""
-    st.session_state["sticker_order_version"] = ""
-    st.session_state["sticker_order_qty"] = 1
-    st.session_state["sticker_order_vendor"] = ""
+    for k in (
+        "sticker_order_id",
+        "sticker_order_name",
+        "sticker_order_alamat",
+        "sticker_order_material",
+        "sticker_order_brand",
+        "sticker_order_version",
+        "sticker_order_qty",
+        "sticker_order_vendor",
+    ):
+        st.session_state.pop(k, None)
     st.session_state["_last_autofill_alamat_key"] = ""
     st.session_state["_resolved_outlet_found"] = False
     st.session_state["_resolved_outlet_alamat"] = ""
+    st.session_state["_pending_clear_sticker_outlet"] = False
     st.session_state["sticker_pick_from_warehouse"] = "— Pilih dari List Materi Promosi Gudang (Available) —"
 
 
@@ -273,7 +277,7 @@ def render_dashboard_table(title: str, frame: pd.DataFrame, download_filename: s
         formatted_df = formatted_df[cols]  # <-- diubah
 
     st.dataframe(
-        format_outlet_table(sorted_frame),
+        formatted_df,
         width="stretch",
         hide_index=True,
         height=440,
@@ -1031,6 +1035,18 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":
                 f"**{picked_rec['Material']}** ({picked_rec['Brand']} • {picked_rec['Version']})"
             )
 
+        _submit_msg = st.session_state.pop("_sticker_submit_success_msg", None)
+        if _submit_msg:
+            st.success(_submit_msg)
+
+        if st.session_state.pop("_pending_clear_sticker_outlet", False):
+            st.session_state["sticker_order_id"] = ""
+            st.session_state["sticker_order_name"] = ""
+            st.session_state["sticker_order_alamat"] = ""
+            st.session_state["_last_autofill_alamat_key"] = ""
+            st.session_state["_resolved_outlet_found"] = False
+            st.session_state["_resolved_outlet_alamat"] = ""
+
         for k_def, v_def in (
             ("sticker_order_id", ""),
             ("sticker_order_name", ""),
@@ -1148,12 +1164,11 @@ elif active_menu == "🏷️ Pemesanan Sticker / Vinyl Panel":
                     st.session_state.sticker_order_results = append_sticker_order_log(
                         rec_list, st.session_state.sticker_order_results
                     )
-                    st.session_state["sticker_order_id"] = ""
-                    st.session_state["sticker_order_name"] = ""
-                    st.session_state["sticker_order_alamat"] = ""
+                    st.session_state["_pending_clear_sticker_outlet"] = True
+                    st.session_state["_last_autofill_alamat_key"] = ""
                     st.session_state["_resolved_outlet_found"] = False
                     st.session_state["_resolved_outlet_alamat"] = ""
-                    st.success(
+                    st.session_state["_sticker_submit_success_msg"] = (
                         f"✅ Lookup cocok dengan Master Data Dashboard: berhasil mengupdate **{upd_cnt}** baris customer "
                         f"dan mencatat hasil pemesanan sticker / vinyl panel ke log."
                     )
