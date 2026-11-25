@@ -68,6 +68,7 @@ from services.sync_service import (
     excel_bytes,
     get_secret_str,
     get_supabase_config,
+    restore_from_google_sheet,
     restore_from_supabase,
     sync_all_cloud_targets,
 )
@@ -137,7 +138,6 @@ def render_sticker_order_png_with_material(
             safe_text(r.get("Nama Vendor")) or "-",
         ])
 
-    # Auto-adjust lebar tiap kolom berdasarkan panjang karakter maksimum
     col_lens = [
         max(len(headers[c]), *(len(row[c]) for row in rows))
         for c in range(len(headers))
@@ -377,7 +377,6 @@ def render_dashboard_table(title: str, frame: pd.DataFrame, download_filename: s
 
     formatted_df = format_outlet_table(sorted_frame).copy()
 
-    # Pastikan "Ukuran Panel Toko" berada tepat di sebelah kiri kolom ukuran sticker/vinyl panel
     panel_col = "Ukuran Panel Toko"
     sticker_col = next(
         (c for c in ("Ukuran Sticker Panel Toko", "Ukuran Sticker / Vinyl Panel") if c in formatted_df.columns),
@@ -388,7 +387,7 @@ def render_dashboard_table(title: str, frame: pd.DataFrame, download_filename: s
         cols.remove(panel_col)
         sticker_idx = cols.index(sticker_col)
         cols.insert(sticker_idx, panel_col)
-        formatted_df = formatted_df[cols]  # <-- diubah
+        formatted_df = formatted_df[cols]
 
     st.dataframe(
         formatted_df,
@@ -452,10 +451,9 @@ def render_outlet_form(current: pd.Series, row_index: int | None) -> tuple[bool,
             for index, column in enumerate(MATERIAL_COLUMNS)
         }
 
-        # Ukuran Panel Toko di sebelah kiri (p1), Ukuran Sticker / Vinyl Panel di sebelah kanan (p2)
         p1, p2, p3, p4, p5, p6 = st.columns(6)
-        panel_size = p1.text_input("Ukuran Panel Toko", value=safe_text(current.get("Ukuran Panel Toko", pd.NA)), placeholder="1 x 3 m", key=f"panel_size_{suffix}")  # <-- diubah
-        sticker_size = p2.text_input("Ukuran Sticker / Vinyl Panel", value=safe_text(current.get("Ukuran Sticker Panel Toko", pd.NA)), placeholder="1 x 2 m", key=f"sticker_size_{suffix}")  # <-- diubah
+        panel_size = p1.text_input("Ukuran Panel Toko", value=safe_text(current.get("Ukuran Panel Toko", pd.NA)), placeholder="1 x 3 m", key=f"panel_size_{suffix}")
+        sticker_size = p2.text_input("Ukuran Sticker / Vinyl Panel", value=safe_text(current.get("Ukuran Sticker Panel Toko", pd.NA)), placeholder="1 x 2 m", key=f"sticker_size_{suffix}")
         panel_brand = p3.text_input("Brand Sticker / Vinyl", value=safe_text(current.get("Brand Panel", pd.NA)), key=f"panel_brand_{suffix}")
         sticker_version = p4.text_input("Versi (Opsional)", value=safe_text(current.get("Versi", pd.NA)), placeholder="V1 / V2", key=f"sticker_version_{suffix}")
         sticker_replace_date = p5.date_input(
@@ -2251,16 +2249,17 @@ elif active_menu == "☁️ Backup & Restore":
     with col_gs:
         with st.container(border=True):
             st.subheader("📗 Google Sheets")
-            st.caption(f"Kirim data kontrak ke tab `{SHEET_NAME}` beserta `sticker_order_log` melalui Google Apps Script.")
+            st.caption(f"Simpan atau pulihkan data kontrak tab `{SHEET_NAME}` beserta `sticker_order_log` melalui Google Apps Script.")
             backup_url = get_secret_str("GOOGLE_APPS_SCRIPT_URL", default="")
             if not backup_url:
                 st.warning("Konfigurasi `GOOGLE_APPS_SCRIPT_URL` belum diatur di Streamlit Secrets.")
             else:
                 st.info(
-                    f"Siap mengirim **{len(st.session_state.contracts)}** data outlet & "
-                    f"**{len(st.session_state.sticker_order_results)}** log pemesanan sticker / vinyl."
+                    f"Data kontrak: **{len(st.session_state.contracts)}** outlet • "
+                    f"Log pemesanan sticker / vinyl: **{len(st.session_state.sticker_order_results)}** baris"
                 )
-                if st.button("⬆️ Backup ke Google Sheet", type="primary", width="stretch"):
+                gs1, gs2 = st.columns(2)
+                if gs1.button("⬆️ Backup ke Google Sheet", type="primary", width="stretch", key="btn_backup_gsheet"):
                     try:
                         row_count = backup_to_google_sheet(
                             _ensure_columns(st.session_state.contracts),
@@ -2271,3 +2270,16 @@ elif active_menu == "☁️ Backup & Restore":
                         st.success(f"✅ {row_count} baris berhasil dikirim ke Google Sheet (termasuk log pemesanan).")
                     except Exception as error:
                         st.error(f"Gagal backup: {error}")
+
+                if gs2.button("⬇️ Restore dari Google Sheet", type="secondary", width="stretch", key="btn_restore_gsheet"):
+                    try:
+                        restored_df, restored_log = restore_from_google_sheet(backup_url)
+                        saved_df = save_data(_ensure_columns(restored_df), already_normalized=True)
+                        set_contracts_state(saved_df, already_normalized=True)
+                        st.session_state.load_warning = None
+                        if restored_log is not None:
+                            st.session_state.sticker_order_results = save_sticker_order_log(restored_log)
+                        st.success(f"✅ {len(saved_df)} baris kontrak berhasil dipulihkan dari Google Sheet.")
+                        st.rerun()
+                    except Exception as error:
+                        st.error(f"Gagal restore dari Google Sheet: {error}")
